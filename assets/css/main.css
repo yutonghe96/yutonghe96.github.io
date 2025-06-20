@@ -1284,6 +1284,9 @@ input, select, textarea {
 				height: calc(3.5rem + 1px);
 				background: #ffffff;
 			}
+			#header nav:before {
+				display: none !important;
+			}			
 
 		#header > :first-child {
 			margin-top: 0;
@@ -1378,7 +1381,7 @@ input, select, textarea {
 					#header nav ul li a:active {
 						background-color: rgba(255, 255, 255, 0.175);
 					}
-
+		
 		#header nav.use-middle:after {
 			content: '';
 			display: block;
