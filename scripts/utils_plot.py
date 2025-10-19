@@ -220,30 +220,8 @@ def create_travel_map(df_, var='total_days', code_convention='code3', bins=None,
     for f in world_geo['features']:
         f['properties']['id'] = f['id']
 
-    # Duplicate features to handle wrapping across ±180° longitude
-    def duplicate_features_with_wrap(features, offsets=[-360, 0, 360]):
-        duplicated = []
-        for offset in offsets:
-            for feature in features:
-                new_feature = copy.deepcopy(feature)
-                geom = new_feature['geometry']
-                if geom['type'] == 'Polygon':
-                    geom['coordinates'] = [
-                        [[lon + offset, lat] for lon, lat in ring]
-                        for ring in geom['coordinates']
-                    ]
-                elif geom['type'] == 'MultiPolygon':
-                    geom['coordinates'] = [
-                        [[[lon + offset, lat] for lon, lat in ring]
-                        for ring in polygon]
-                        for polygon in geom['coordinates']
-                    ]
-                duplicated.append(new_feature)
-        return duplicated
-    world_geo['features'] = duplicate_features_with_wrap(world_geo['features'])
-
     # Create folium base map
-    m = folium.Map(location=[0, 0], zoom_start=2, min_zoom=2, max_zoom=6, max_bounds=True)
+    m = folium.Map(location=[0, 0], zoom_start=2, min_zoom=2, max_zoom=6, world_copy_jump=True)
 
     # Add choropleth layer
     folium.Choropleth(
@@ -261,7 +239,6 @@ def create_travel_map(df_, var='total_days', code_convention='code3', bins=None,
 
     # Merge data for tooltips
     gdf = gpd.GeoDataFrame.from_features(world_geo['features']).set_crs("EPSG:4326")
-    bounds = gdf.total_bounds
     gdf = gdf.merge(df_[[code_convention, var, 'country']], left_on='id', right_on=code_convention, how='left')
     # Ensure tooltip always has a name, even if not in df
     gdf['country_name'] = gdf['country'].fillna(gdf['name'])
@@ -277,9 +254,6 @@ def create_travel_map(df_, var='total_days', code_convention='code3', bins=None,
         style_function=lambda f: {'fillOpacity': 0, 'color': 'transparent', 'weight': 0},
         tooltip=folium.GeoJsonTooltip(fields=['tooltip_text'], labels=False, sticky=True)
     ).add_to(m)
-
-    # Fit to world bounds
-    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
     # Hide default folium legend
     hide_legend = Element("""
@@ -379,7 +353,8 @@ def create_book_map(df_, var='total_days', code_convention='code3', bins=None, c
         zoom_start=2,
         min_zoom=2,
         max_zoom=6,
-        max_bounds=True
+        max_bounds=True,
+        world_copy_jump=True
     )
     import copy
     def duplicate_features_with_wrap(features, offsets=[-360, 0, 360]):
@@ -401,7 +376,7 @@ def create_book_map(df_, var='total_days', code_convention='code3', bins=None, c
                     ]
                 duplicated.append(new_feature)
         return duplicated
-    world_geo['features'] = duplicate_features_with_wrap(world_geo['features'])
+    #world_geo['features'] = duplicate_features_with_wrap(world_geo['features'])
 
     # Add choropleth layer
     folium.Choropleth(
@@ -445,7 +420,7 @@ def create_book_map(df_, var='total_days', code_convention='code3', bins=None, c
     ).add_to(m)
 
     # Fit to bounds
-    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+    #m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
     # Add JS to hide default legend
     hide_legend = Element("""
