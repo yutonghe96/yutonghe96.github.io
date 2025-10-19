@@ -263,11 +263,13 @@ def create_travel_map(df_, var='total_days', code_convention='code3', bins=None,
     gdf = gpd.GeoDataFrame.from_features(world_geo['features']).set_crs("EPSG:4326")
     bounds = gdf.total_bounds
     gdf = gdf.merge(df_[[code_convention, var, 'country']], left_on='id', right_on=code_convention, how='left')
-
+    # Ensure tooltip always has a name, even if not in df
+    gdf['country_name'] = gdf['country'].fillna(gdf['name'])
+    # Construct tooltip text
     gdf['tooltip_text'] = gdf.apply(
-        lambda r: f"{r['country']}: {format_days_to_ymwd(r[var])}" if pd.notnull(r[var]) else f"{r['country']}: No data",
+        lambda r: f"{r['country_name']}: {format_days_to_ymwd(r[var])}" if pd.notnull(r[var]) else f"{r['country_name']}: 0 day",
         axis=1
-    )
+        )
 
     folium.GeoJson(
         gdf,
@@ -315,7 +317,7 @@ def create_travel_map(df_, var='total_days', code_convention='code3', bins=None,
     legend_html = f"""
     <div style="
         position: fixed;
-        bottom: 15px; left: 20px; width: 90px; height:auto;
+        bottom: 15px; left: 20px; width: 90px; height: 80px;
         background-color: lightgray;
         border:0px solid grey; z-index:9999; font-size:12px;
         padding: 5px;
