@@ -15,6 +15,7 @@ rel="stylesheet"
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
 <link rel="stylesheet" href="assets/css/main.css" />
 <noscript><link rel="stylesheet" href="assets/css/noscript.css" /></noscript>
+<script src="js/MathJax-4.0.0/tex-mml-chtml.js" async></script>
 </head>
 <body class="is-preload">
 <!-- Wrapper -->
@@ -56,11 +57,17 @@ In my spare time I watch movies, read a lot, write a little, and enjoy the small
 <!-- work -->
 <article id="work">
 <h2 class="major">Data Science <a href="https://github.com/yutonghe96" class="icon brands fa-github" target="_blank" rel="noopener noreferrer"></a></h2>
-<p>Professionally, I deliver valuable data-driven insights and provide customized machine learning solutions to international businesses. Some examples are:</p>
+<p>I build customized machine learning solutions for international businesses. Some examples are:</p>
 <p> - Identifying new consumer markets using unsupervised clustering, which helps business growth in untapped areas. </p>
 <p> - Time-series forecast based on early indicators using various linear and nonlinear regression models. This enables the clients to assess the impact of their business actions at an earlier stage than otherwise possible. </p>
 <p> - Channel attribution and budget recommendation via the media-mix modeling (MMM) approach, which provides directional indications of the marketing efficiency of different channels/platforms. </p>
 <p> - Measuring incrementality from custom designed geo experiments, which uses Bayesian regression as the synthetic control method. This provides a rigorous readout on the impact of marketing efforts. </p>
+<p> In one way or another, these problems are addressed via an optimization process: </p>
+\[
+\begin{equation}
+\hat y_{\rm opt}^{\mathcal{D}}(x) = \underset{\hat y^{\mathcal{D}}}{\rm argmin}\frac{1}{M}\sum_l L(\hat y(x_l), y_l),\quad\mathcal{D}=\{(x_i,y_i)\}_{i=1}^M.
+\end{equation}
+\]
 </article>
 
 <!-- research -->
@@ -75,7 +82,17 @@ they provide valuable insight into the turbulent physics at the very early times
 As full theories, modified gravity presents a vast and complex space of possibilities.
 But at the level of GWs, as a result of linearization, only a handful of additional parameters enter and modify the standard GW equation in GR.
 Therefore, GW spectrum also serves as a phenomenological window into the parameter space of modified gravity.</p>
-<p>Publications & manuscripts:</p>
+<p>The following manuscripts explore different parts of this action:</p>
+\[
+\begin{align}
+S &= \int {\rm d}^4x\,\sqrt{-g}\,\Bigg[
+\frac{1}{2\kappa}\left(\mathcal{L}_{\rm mat} + R + \frac{1}{4}m_{\rm g}^2\left(h_{\mu\nu}h^{\mu\nu} - \frac{1}{2}h^2\right) + \sum_{i=2}^5\mathcal{L}_i\right) \nonumber\\
+  &\quad -\left(\frac{1}{4}F_{\mu\nu}F^{\mu\nu} - A_\mu J^\mu\right)
+    + \frac{\alpha_{\rm EM}^2}{90m_{\rm e}^4}
+    \left((F_{\mu\nu}F^{\mu\nu})^2 + \frac{7}{4}(\tilde F_{\mu\nu}F^{\mu\nu})^2\right)
+\Bigg].
+\end{align}
+\]
 </p>10.<a href="http://su.diva-portal.org/smash/record.jsf?pid=diva2%3A1849882&dswid=-7965" 
 target="_blank" rel="noopener noreferrer">
 Cosmological gravitational waves and their interaction with large-scale magnetic fields (PhD thesis, Sigrid Arrhenius Award 2024)</a> </p>
