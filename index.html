@@ -15,6 +15,48 @@ rel="stylesheet"
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
 <link rel="stylesheet" href="assets/css/main.css" />
 <noscript><link rel="stylesheet" href="assets/css/noscript.css" /></noscript>
+<style>
+    .math-display {
+      overflow-x: auto;       /* horizontal scroll if needed */
+      -webkit-overflow-scrolling: touch;
+      text-align: center;
+      margin: 1em 0;
+    }
+
+    .MathJax {
+      font-size: 1em;
+    }
+
+    @media (max-width: 768px) {
+      .MathJax {
+        font-size: 0.85em;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .MathJax {
+        font-size: 0.75em;
+      }
+    }
+  </style>
+<script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['\\[', '\\]'], ['$$', '$$']],
+        processEscapes: true,
+      },
+      chtml: {
+        scale: 1,            // base scale
+        minScale: 0.75,      // allow smaller font on mobile
+      },
+      options: {
+        renderActions: {
+          addMenu: [0, '', '']  // disables the context menu if desired
+        }
+      }
+    };
+    </script>    
 <script src="js/MathJax-4.0.0/tex-mml-chtml.js" async></script>
 </head>
 <body class="is-preload">
@@ -83,6 +125,7 @@ As full theories, modified gravity presents a vast and complex space of possibil
 But at the level of GWs, as a result of linearization, only a handful of additional parameters enter and modify the standard GW equation in GR.
 Therefore, GW spectrum also serves as a phenomenological window into the parameter space of modified gravity.</p>
 <p>The following manuscripts explore different parts of this action:</p>
+<div class="math-display">
 \[
 \begin{align}
 S &= \int {\rm d}^4x\,\sqrt{-g}\,\Bigg[
@@ -93,6 +136,7 @@ S &= \int {\rm d}^4x\,\sqrt{-g}\,\Bigg[
 \Bigg].
 \end{align}
 \]
+</div>
 </p>10.<a href="http://su.diva-portal.org/smash/record.jsf?pid=diva2%3A1849882&dswid=-7965" 
 target="_blank" rel="noopener noreferrer">
 Cosmological gravitational waves and their interaction with large-scale magnetic fields (PhD thesis, Sigrid Arrhenius Award 2024)</a> </p>
