@@ -161,7 +161,7 @@ def plot_book_count(df):
         x=count_per_year['dates_read'].astype(str),
         y=count_per_year['count'],
         name='Book count',
-        marker=dict(color=color_bar, line=dict(width=0)),  # solid color, no edge
+        marker=dict(color=color_bar, line=dict(width=0)),
         customdata=count_per_year['count'],
         hovertemplate='Year: %{x}<br>Books: %{y}<extra></extra>'
     ))
@@ -182,7 +182,12 @@ def plot_book_count(df):
     fig.update_layout(
         title=f'Books Read ({int(count_per_year["dates_read"].min())}–{int(count_per_year["dates_read"].max())})',
         xaxis=dict(title='Year', showgrid=False, zeroline=False),
-        yaxis=dict(title='Book count', showgrid=False, zeroline=False),
+        yaxis=dict(
+            title=dict(text='Book count', font=dict(color=color_bar)),
+            tickfont=dict(color=color_bar),
+            showgrid=False,
+            zeroline=False
+        ),
         yaxis2=dict(
             title=dict(text='Cumulative book count', font=dict(color=color_line)),
             overlaying='y',
