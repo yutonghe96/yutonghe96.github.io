@@ -1,39 +1,41 @@
 import numpy as np
 import pandas as pd
 import pycountry
+import country_converter as coco
 from collections import Counter
-from sklearn.metrics import confusion_matrix
 
 def transform_verbose_to_calendar(df, save=False):
     # Step 1: Build date → country map with first-claim-wins (to preserve day trips)
     date_to_country = {}
     for _, row in df.iterrows():
-        days = pd.date_range(row['start_date'], row['end_date'], freq='D', inclusive='left')  # inclusive
+        days = pd.date_range(row['start_date'], row['end_date'], freq='D', inclusive='left')
         for day in days:
             if day not in date_to_country:
-                date_to_country[day] = row['country']  # assign only if not already claimed
-
+                date_to_country[day] = row['country']
     # Step 2: Convert to DataFrame
     dc_df = pd.DataFrame(list(date_to_country.items()), columns=['date', 'country'])
     dc_df['year'] = dc_df['date'].dt.year
-
     # Step 3: Count days per (country, year)
     grouped = dc_df.groupby(['country', 'year']).size().unstack(fill_value=0)
     grouped.columns.name = None
-
     # Step 4: Add total per country column
     grouped['total_days'] = grouped.sum(axis=1)
-
     # Step 5: Add total per year row
     grouped.loc['All'] = grouped.drop(columns='total_days').sum()
     grouped.at['All', 'total_days'] = grouped['total_days'].sum()
-
-    # Step 6: Move 'Total_days' to first column
+    # Step 6: Move 'total_days' to first column
     cols = ['total_days'] + [col for col in grouped.columns if col != 'total_days']
     final_df = grouped[cols].reset_index()
+    # Step 7: Add continent column
+    final_df['continent'] = final_df['country'].apply(lambda x: coco.convert(names=x, to='continent') if x != 'All' else None)
+    # Step 8: Reorder columns to place continent after country
+    col_order = ['country', 'continent'] + [col for col in final_df.columns if col not in ['country', 'continent']]
+    final_df = final_df[col_order]
+    # Step 9: Convert numeric columns to Int64
     final_df = final_df.apply(lambda col: col.astype('Int64') if pd.api.types.is_numeric_dtype(col) else col)
-    final_df = final_df.sort_values(by='country', ascending=True).sort_values(by='total_days', ascending=False).reset_index(drop=True)
-    if save == True:
+    # Step 10: Sort
+    final_df = final_df.sort_values(by='total_days', ascending=False).reset_index(drop=True)
+    if save:
         final_df.to_csv('trips_calendar.csv', index=False)
     return final_df
 

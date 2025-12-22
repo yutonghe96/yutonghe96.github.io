@@ -340,25 +340,28 @@ def create_tree(
         save_path=None
         ):
     
+    df_orig = df.copy()
+    df_copy = df.copy()
+    
     # Step 0: aggregate low-value entries into "Other"
     if threshold_global:
         # Aggregate globally
-        large_entries = df[df[var] >= threshold]
-        small_entries_sum = df[df[var] < threshold][var].sum()
+        large_entries = df_copy[df_copy[var] >= threshold]
+        small_entries_sum = df_copy[df_copy[var] < threshold][var].sum()
         if small_entries_sum > 0:
             other_row = {feat: 'Other', flag: 'Other', var: small_entries_sum}
-            df = pd.concat([large_entries, pd.DataFrame([other_row])], ignore_index=True)
+            df_copy = pd.concat([large_entries, pd.DataFrame([other_row])], ignore_index=True)
     else:
         # Aggregate per flag
         aggregated_rows = []
-        for f, group in df.groupby(flag):
+        for f, group in df_copy.groupby(flag):
             large_entries = group[group[var] >= threshold]
             small_entries_sum = group[group[var] < threshold][var].sum()
             aggregated_rows.append(large_entries)
             if small_entries_sum > 0:
                 other_row = {feat: 'Other', flag: f, var: small_entries_sum}
                 aggregated_rows.append(pd.DataFrame([other_row]))
-        df = pd.concat(aggregated_rows, ignore_index=True)
+        df_copy = pd.concat(aggregated_rows, ignore_index=True)
 
     if 'Other' not in color_dict:
         color_dict['Other'] = 'gray'
@@ -368,14 +371,14 @@ def create_tree(
     max_line_length = 30
 
     # Normalize count to 0-1
-    count_min = df[var].min()
-    count_max = df[var].max()
+    count_min = df_copy[var].min()
+    count_max = df_copy[var].max()
     norm_var = f'norm_{var}'
-    df[norm_var] = (df[var] - count_min) / (count_max - count_min)
+    df_copy[norm_var] = (df_copy[var] - count_min) / (count_max - count_min)
 
     # Compute dynamic line length
-    df['line_length'] = df[norm_var] * (max_line_length - min_line_length) + min_line_length
-    df['line_length'] = df['line_length'].astype(int)
+    df_copy['line_length'] = df_copy[norm_var] * (max_line_length - min_line_length) + min_line_length
+    df_copy['line_length'] = df_copy['line_length'].astype(int)
 
     def wrap_feat(row):
         genre = row[feat]
@@ -408,19 +411,19 @@ def create_tree(
         return '<br>'.join(lines)
     
     feat_wrapped = f'{feat}_wrapped'
-    df[feat_wrapped] = df.apply(wrap_feat, axis=1)
-    df['id'] = df[flag] + ' | ' + df[feat_wrapped]  # unique per flag+genre
-    df['parent'] = ""  # flat hierarchy
-    df['label'] = df[feat_wrapped]  # show only genre text
+    df_copy[feat_wrapped] = df_copy.apply(wrap_feat, axis=1)
+    df_copy['id'] = df_copy[flag] + ' | ' + df_copy[feat_wrapped]  # unique per flag+genre
+    df_copy['parent'] = ""  # flat hierarchy
+    df_copy['label'] = df_copy[feat_wrapped]  # show only genre text
 
     # Step 6: create treemap
     fig = go.Figure(go.Treemap(
-        ids=df['id'],
-        labels=df['label'],
-        parents=df['parent'],
-        values=df[var],
+        ids=df_copy['id'],
+        labels=df_copy['label'],
+        parents=df_copy['parent'],
+        values=df_copy[var],
         marker=dict(
-            colors=[color_dict.get(f, 'gray') for f in df[flag]],
+            colors=[color_dict.get(f, 'gray') for f in df_copy[flag]],
             line=dict(color='black', width=1)
         ),
         textinfo="label+value+percent parent",
@@ -438,13 +441,14 @@ def create_tree(
     )
 
     # Step 7: compute total counts per flag, sort descending for title
-    flag_counts = df.groupby(flag, as_index=False)[var].sum().sort_values(var, ascending=False)
-    total_count = flag_counts[var].sum()
+    flag_counts_orig = df_orig.groupby(flag, as_index=False)[var].sum().sort_values(var, ascending=False)
+    total_count_orig = flag_counts_orig[var].sum()
+
     flag_summaries = []
-    for _, row in flag_counts.iterrows():
-        flag_name = row[flag]        # <- use a different variable
+    for _, row in flag_counts_orig.iterrows():
+        flag_name = row[flag]
         flag_count = row[var]
-        flag_frac = flag_count / total_count
+        flag_frac = flag_count / total_count_orig
         color = color_dict.get(flag_name, 'gray')
         flag_summaries.append(f"<span style='color:{color}'>{flag_name} ({int(flag_count)}, {flag_frac:.0%})</span>")
 
