@@ -1,0 +1,16 @@
+name: website_map
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - ipykernel
+  - openpyxl
+  - numpy
+  - pandas
+  - matplotlib
+  - plotly
+  - pycountry
+  - country_converter
+  - collections
+  - nbformat
+prefix: /Users/yutonghe/miniconda3/envs/website_map
