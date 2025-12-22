@@ -1,15 +1,9 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import plotly.graph_objects as go
-import folium
-import pycountry
-import requests
-import geopandas as gpd
-import copy
-from branca.element import Element
-from folium.features import GeoJsonTooltip
-from utils_processing import error_matrix_2x2, add_country_codes, format_days_to_ymwd
+from utils_processing import add_country_codes, format_days_to_ymwd
 
 def plot_bar(df, cumulative=False, rotation=0, ystep=1, title=None):
     x_val = df.columns[0]
@@ -204,282 +198,132 @@ def plot_book_count(df):
 
     fig.show()
 
-def create_travel_map(df_, var='total_days', code_convention='code3', bins=None, colors='Set1', save_path=None):
+def create_map(
+    df_,
+    var="total_days",
+    code_convention="code3",
+    bins=None,
+    color=None,
+    projection_type="orthographic",
+    tooltip_mode='calendar',  # 'calendar' or 'raw'
+    save_path=None
+):
 
-    # Add ISO country codes
-    df_0 = df_.copy() # for counts
-    df_ = add_country_codes(df_)
-    df_ = df_.dropna(subset=[code_convention])
+    # ---- Ensure ISO codes ----
+    df = add_country_codes(df_.copy())
+    df = df.dropna(subset=[code_convention, var])
 
-    # Define bins automatically if not given
+    # ---- Binning ----
     if bins is None:
-        bins = np.linspace(df_[var].min(), df_[var].max(), 5)  # 4 intervals → 4 legend categories
+        bins = np.linspace(df[var].min(), df[var].max(), 5)
 
-    # Define fixed 4 colors (Set1)
-    set1_colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3']
-    legend_labels = ["days", "weeks", "months", "years"]
-
-    # Load GeoJSON for world countries
-    url = 'https://raw.githubusercontent.com/python-visualization/folium/master/examples/data/world-countries.json'
-    world_geo = requests.get(url).json()
-    for f in world_geo['features']:
-        f['properties']['id'] = f['id']
-
-    # Create folium base map
-    m = folium.Map(location=[0, 0], zoom_start=2, min_zoom=2, max_zoom=6, world_copy_jump=True)
-
-    # Add choropleth layer
-    folium.Choropleth(
-        geo_data=world_geo,
-        data=df_,
-        columns=[code_convention, var],
-        key_on='feature.properties.id',
-        bins=bins,
-        fill_color=colors,
-        nan_fill_color='lightgray',
-        fill_opacity=0.9,
-        line_opacity=0.1,
-        legend_name=None
-    ).add_to(m)
-
-    # Merge data for tooltips
-    gdf = gpd.GeoDataFrame.from_features(world_geo['features']).set_crs("EPSG:4326")
-    gdf = gdf.merge(df_[[code_convention, var, 'country']], left_on='id', right_on=code_convention, how='left')
-    # Ensure tooltip always has a name, even if not in df
-    gdf['country_name'] = gdf['country'].fillna(gdf['name'])
-    # Construct tooltip text
-    gdf['tooltip_text'] = gdf.apply(
-        lambda r: f"{r['country_name']}: {format_days_to_ymwd(r[var])}" if pd.notnull(r[var]) else f"{r['country_name']}: 0 day",
-        axis=1
-        )
-
-    folium.GeoJson(
-        gdf,
-        name="Hover Info",
-        style_function=lambda f: {'fillOpacity': 0, 'color': 'transparent', 'weight': 0},
-        tooltip=folium.GeoJsonTooltip(fields=['tooltip_text'], labels=False, sticky=True)
-    ).add_to(m)
-
-    # Hide default folium legend
-    hide_legend = Element("""
-    <script>
-    function hideLegend(){
-        var legend = document.querySelector('.leaflet-control.legend');
-        if(legend){ legend.style.display = 'none'; }
-        else { setTimeout(hideLegend, 500); }
-    }
-    hideLegend();
-    </script>
-    """)
-    m.get_root().html.add_child(hide_legend)
-
-    # ---- Determine counts directly from bins and df_ ----
-    counts = []
-    for i in range(len(bins) - 1):
-        lower, upper = bins[i], bins[i + 1]
-        # count values in [lower, upper) range
-        count = df_0[(df_0[var] >= lower) & (df_0[var] < upper)].shape[0] if i < len(bins) - 2 else df_0[(df_0[var] >= lower) & (df_0[var] <= upper)].shape[0]
-        counts.append(count)
-
-    # If user provides more or fewer than 4 bins, truncate or pad labels
     n_bins = len(bins) - 1
-    legend_labels_used = legend_labels[:n_bins] + ["extra"] * max(0, n_bins - len(legend_labels))
-
-    # ---- Build custom legend ----
-    legend_entries = ""
-    for color, label, count in zip(set1_colors[:n_bins], legend_labels_used, counts):
-        legend_entries += f"""
-        <i style="background:{color}; width:16px; height:16px; float:left; margin-right:4px;"></i>
-        {label} ({count})<br>
-        """
-
-    legend_html = f"""
-    <div style="
-        position: fixed;
-        bottom: 15px; left: 20px; width: 90px; height: 80px;
-        background-color: lightgray;
-        border:0px solid grey; z-index:9999; font-size:12px;
-        padding: 5px;
-    ">
-        {legend_entries}
-    </div>
-    """
-    m.get_root().html.add_child(Element(legend_html))
-
-    # Remove mobile tap artifacts
-    remove_mobile_artifacts = Element("""
-    <style>
-        .leaflet-interactive:focus { outline: none !important; stroke: none !important; }
-        .leaflet-container * {
-            -webkit-tap-highlight-color: rgba(0,0,0,0);
-            -webkit-touch-callout: none;
-            -webkit-user-select: none;
-            user-select: none;
-        }
-    </style>
-    """)
-    m.get_root().html.add_child(remove_mobile_artifacts)
-
-    # Save if path provided
-    if save_path:
-        m.save(save_path)
-
-    return m
-
-def create_book_map(df_, var='total_days', code_convention='code3', bins=None, colors='Set1', save_path=None):
-    # Add ISO country codes
-    df_ = add_country_codes(df_)
-
-    # Drop rows with missing codes
-    df_ = df_.dropna(subset=[code_convention])
-
-    if bins is None:
-        bins = np.linspace(df_[var].min(), df_[var].max(), 4)
-
-    # 4 colors from Set1 (fixed colors as in original)
-    set1_colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3']
-
-    # Load GeoJSON of world countries
-    url = 'https://raw.githubusercontent.com/python-visualization/folium/master/examples/data/world-countries.json'
-    world_geo = requests.get(url).json()
-
-    # Move feature.id to properties.id (needed for matching)
-    for f in world_geo['features']:
-        f['properties']['id'] = f['id']
-
-    # Create GeoDataFrame and filter
-    gdf = gpd.GeoDataFrame.from_features(world_geo['features']).set_crs("EPSG:4326")
-    gdf = gdf[gdf['id'].isin(df_[code_convention])]
-    bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
-    
-    # Create base map
-    m = folium.Map(
-        location=[0, 0],
-        zoom_start=2,
-        min_zoom=2,
-        max_zoom=6,
-        max_bounds=True,
-        world_copy_jump=True
-    )
-    import copy
-    def duplicate_features_with_wrap(features, offsets=[-360, 0, 360]):
-        duplicated = []
-        for offset in offsets:
-            for feature in features:
-                new_feature = copy.deepcopy(feature)
-                geometry = new_feature['geometry']
-                if geometry['type'] == 'Polygon':
-                    geometry['coordinates'] = [
-                        [[lon + offset, lat] for lon, lat in ring]
-                        for ring in geometry['coordinates']
-                    ]
-                elif geometry['type'] == 'MultiPolygon':
-                    geometry['coordinates'] = [
-                        [[[lon + offset, lat] for lon, lat in ring]
-                        for ring in polygon]
-                        for polygon in geometry['coordinates']
-                    ]
-                duplicated.append(new_feature)
-        return duplicated
-    #world_geo['features'] = duplicate_features_with_wrap(world_geo['features'])
-
-    # Add choropleth layer
-    folium.Choropleth(
-        geo_data=world_geo,
-        data=df_,
-        columns=[code_convention, var],
-        key_on='feature.properties.id',
+    df["bin"] = pd.cut(
+        df[var],
         bins=bins,
-        fill_color=colors,
-        nan_fill_color='lightgray',
-        fill_opacity=0.9,
-        line_opacity=0.1,
-        legend_name=None
-    ).add_to(m)
+        include_lowest=True,
+        labels=False
+    ).astype(int)
 
-    # Merge data into gdf for tooltip
-    gdf = gdf.merge(df_[[code_convention, var, 'country']], left_on='id', right_on=code_convention, how='left')
+    # ---- Colors ----
+    if color is None:
+        # Default discrete Set1
+        colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"][:n_bins]
+    elif isinstance(color, list):
+        # Use provided discrete colors
+        colors = color[:n_bins]
+    else:
+        # Single color: create a log-scaled gradient
+        # Convert base color to RGB
+        base_rgb = np.array(mcolors.to_rgb(color))
+        # Log scale based on bin midpoints
+        bin_mids = np.array([bins[i]+(bins[i+1]-bins[i])/2 for i in range(n_bins)])
+        log_norm = (np.log(bin_mids) - np.log(bin_mids.min())) / (np.log(bin_mids.max()) - np.log(bin_mids.min()))
+        # Darker = larger values
+        colors = [mcolors.to_hex(base_rgb * (0.3 + 0.7*(1-log_val))) for log_val in log_norm]
 
-    # Add formatted tooltip text using country name instead of code
-    gdf['tooltip_text'] = gdf.apply(
-        lambda row: f"{row['country']}: {row[var]}" if pd.notnull(row[var]) else f"{row['country']}: No data",
-        axis=1
+    # ---- Discrete colorscale ----
+    colorscale = []
+    for i, c in enumerate(colors):
+        colorscale.append([i / n_bins, c])
+        colorscale.append([(i + 1) / n_bins, c])
+
+    # ---- Tooltip ----
+    def _tooltip(row):
+        country_name = row.get('country', row[code_convention])
+        value = row[var]
+        if tooltip_mode == 'raw':
+            return f"{country_name}: {value}"
+        else:  # 'calendar' mode
+            return f"{country_name}: {format_days_to_ymwd(value)}"
+
+    hover_text = df.apply(_tooltip, axis=1)
+
+    # ---- Choropleth ----
+    fig = go.Figure(
+        go.Choropleth(
+            locations=df[code_convention],
+            z=df["bin"],
+            locationmode="ISO-3",
+            text=hover_text,
+            hoverinfo="text",
+            colorscale=colorscale,
+            zmin=0,
+            zmax=n_bins,
+            marker_line_width=0,
+            showscale=False
+        )
     )
 
-    # Add GeoJson with tooltip showing formatted time string
-    folium.GeoJson(
-        gdf,
-        name="Hover Info",
-        style_function=lambda feature: {
-            'fillColor': 'transparent',
-            'color': 'transparent',
-            'weight': 0,
-            'fillOpacity': 0,
-        },
-        highlight_function=lambda x: {'weight': 0, 'color': 'transparent'},
-        tooltip=folium.GeoJsonTooltip(
-            fields=['tooltip_text'],
-            labels=False,
-            sticky=True
+    fig.update_traces(
+        hoverlabel=dict(
+            bgcolor='black',
+            )
         )
-    ).add_to(m)
 
-    # Fit to bounds
-    #m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+    # ---- Geo config ----
+    fig.update_geos(
+        projection_type=projection_type,
+        #resolution=50,
+        showland=True,
+        landcolor="white",
+        showocean=True,
+        oceancolor="skyblue",
+        showcountries=False,
+        showcoastlines=False,
+        showframe=False,
+        bgcolor="black",
+    )
 
-    # Add JS to hide default legend
-    hide_legend = Element("""
-    <script>
-    function hideLegend(){
-        var legend = document.querySelector('.leaflet-control.legend');
-        if(legend){
-            legend.style.display = 'none';
-        } else {
-            setTimeout(hideLegend, 500);
-        }
+    # ---- Layout ----
+    fig.update_layout(
+        paper_bgcolor="black",
+        plot_bgcolor="black",
+        margin=dict(l=0, r=0, t=0, b=0),
+        dragmode="pan",
+        hovermode="closest",
+    )
+
+    config = {
+        "displayModeBar": True,        # show mode bar
+        "displaylogo": False,          # remove Plotly logo
+        "modeBarButtonsToRemove": [    # buttons to remove
+        "toImage",                     # download as PNG
+        "zoom2d",                      # optional: keep zoom if you want
+        "pan2d",                       # optional: keep pan
+        "lasso2d", "select2d",
+        "autoScale2d", 
+        "hoverCompareCartesian",
+        "hoverClosestCartesian",
+        "toggleSpikelines",
+        "resetScale2d",                # remove default reset if you will keep your own
+        ],
+        "modeBarButtonsToAdd": [       # optional: add back only desired buttons
+        "zoomIn2d", "zoomOut2d", "resetScale2d"
+        ]
     }
-    hideLegend();
-    </script>
-    """)
-    m.get_root().html.add_child(hide_legend)
 
-    # Manually define legend labels
-    legend_html = f"""
-    <div style="
-        position: fixed; 
-        bottom: 15px; left: 20px; width: 72px; height: 80px; 
-        background-color: lightgray; 
-        border:0px solid grey; z-index:9999; font-size:12px;
-        padding: 5px;
-    ">
-        <i style="background:{set1_colors[0]}; width: 16px; height: 16px; float: left; margin-right: 4px;"></i> >0 <br>
-        <i style="background:{set1_colors[1]}; width: 16px; height: 16px; float: left; margin-right: 4px;"></i> >1 <br>
-        <i style="background:{set1_colors[2]}; width: 16px; height: 16px; float: left; margin-right: 4px;"></i> >10 <br>
-        <i style="background:{set1_colors[3]}; width: 16px; height: 16px; float: left; margin-right: 4px;"></i> >30
-    </div>
-    """
-    m.get_root().html.add_child(Element(legend_html))
-
-    remove_mobile_artifacts = Element("""
-    <style>
-        .leaflet-interactive:focus {
-            outline: none !important;
-            stroke: none !important;
-        }
-
-        /* Remove tap highlight on mobile (for iOS/Android) */
-        .leaflet-container * {
-            -webkit-tap-highlight-color: rgba(0,0,0,0);
-            -webkit-touch-callout: none;
-            -webkit-user-select: none;
-            user-select: none;
-        }
-    </style>
-    """)
-    m.get_root().html.add_child(remove_mobile_artifacts)
-
-    # Save map if path is provided
     if save_path:
-        m.save(save_path)
+        fig.write_html(save_path, include_plotlyjs="cdn", config=config)
 
-    return m
+    return fig.show(config=config)

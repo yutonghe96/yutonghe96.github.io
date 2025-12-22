@@ -169,38 +169,3 @@ def update_country_data(df, country_name, year_updates=None, new_days=None):
 def geometric_series(r, a=1, n=12):
     s = a*(r**n-1)/(r-1)
     return s
-
-def error_matrix_2x2(y_true, y_pred, labels, percentage=False, flatten=True):
-
-    cm = confusion_matrix(y_true, y_pred, labels=labels)
-
-    if cm.shape == (1, 1):
-        # Only one class present in both y_true and y_pred
-        if y_true[0] == labels[0]:
-            cm_ = [cm[0, 0], 0, 0, 0]  # Only TN
-        else:
-            cm_ = [0, 0, 0, cm[0, 0]]  # Only TP
-
-    elif cm.shape == (1, 2):
-        # Only one class in y_true (e.g., [0]), both classes in y_pred
-        cm_ = [cm[0, 0], cm[0, 1], 0, 0]  # TN, FP, -, -
-
-    elif cm.shape == (2, 1):
-        # Both classes in y_true, only one class in y_pred
-        cm_ = [cm[0, 0], 0, cm[1, 0], 0]  # TN, -, FN, -
-
-    else:
-        # Standard 2x2 confusion matrix
-        cm_ = cm.ravel().tolist()  # [TN, FP, FN, TP]
-
-    if percentage:
-        total = sum(cm_)
-        if total > 0:
-            cm_ = [x / total for x in cm_]
-        else:
-            cm_ = [0.0] * 4
-
-    if not flatten:
-        cm_ = np.array(cm_).reshape(len(labels), len(labels))
-
-    return cm_
