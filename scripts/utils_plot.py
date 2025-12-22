@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import plotly.graph_objects as go
+import plotly.io as pio
 from utils_processing import add_country_codes, format_days_to_ymwd
 
 def plot_bar(df, cumulative=False, rotation=0, ystep=1, title=None):
@@ -325,5 +326,148 @@ def create_map(
 
     if save_path:
         fig.write_html(save_path, include_plotlyjs="cdn", config=config)
+
+    return fig.show(config=config)
+
+def create_tree(
+        df,
+        feat='genre',
+        var='count',
+        flag='flag',
+        threshold=0,
+        threshold_global=False,
+        color_dict={'Movie': 'royalblue', 'TV': 'gold', 'Other': 'white'},
+        save_path=None
+        ):
+    
+    # Step 0: aggregate low-value entries into "Other"
+    if threshold_global:
+        # Aggregate globally
+        large_entries = df[df[var] >= threshold]
+        small_entries_sum = df[df[var] < threshold][var].sum()
+        if small_entries_sum > 0:
+            other_row = {feat: 'Other', flag: 'Other', var: small_entries_sum}
+            df = pd.concat([large_entries, pd.DataFrame([other_row])], ignore_index=True)
+    else:
+        # Aggregate per flag
+        aggregated_rows = []
+        for f, group in df.groupby(flag):
+            large_entries = group[group[var] >= threshold]
+            small_entries_sum = group[group[var] < threshold][var].sum()
+            aggregated_rows.append(large_entries)
+            if small_entries_sum > 0:
+                other_row = {feat: 'Other', flag: f, var: small_entries_sum}
+                aggregated_rows.append(pd.DataFrame([other_row]))
+        df = pd.concat(aggregated_rows, ignore_index=True)
+
+    if 'Other' not in color_dict:
+        color_dict['Other'] = 'gray'
+    
+    # Define min/max line length
+    min_line_length = 10
+    max_line_length = 30
+
+    # Normalize count to 0-1
+    count_min = df[var].min()
+    count_max = df[var].max()
+    norm_var = f'norm_{var}'
+    df[norm_var] = (df[var] - count_min) / (count_max - count_min)
+
+    # Compute dynamic line length
+    df['line_length'] = df[norm_var] * (max_line_length - min_line_length) + min_line_length
+    df['line_length'] = df['line_length'].astype(int)
+
+    def wrap_feat(row):
+        genre = row[feat]
+        line_length = row['line_length']
+        
+        # If the whole genre fits, return as is
+        if len(genre) <= line_length:
+            return genre
+        
+        # Split into words
+        words = genre.split(' ')
+        lines = []
+        current_line = ''
+        
+        for word in words:
+            # If adding this word exceeds line_length
+            if len(current_line) + len(word) + (1 if current_line else 0) > line_length:
+                # Push current line to lines
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+            else:
+                # Append word to current line
+                current_line = f"{current_line} {word}" if current_line else word
+        
+        # Add last line
+        if current_line:
+            lines.append(current_line)
+        
+        return '<br>'.join(lines)
+    
+    feat_wrapped = f'{feat}_wrapped'
+    df[feat_wrapped] = df.apply(wrap_feat, axis=1)
+    df['id'] = df[flag] + ' | ' + df[feat_wrapped]  # unique per flag+genre
+    df['parent'] = ""  # flat hierarchy
+    df['label'] = df[feat_wrapped]  # show only genre text
+
+    # Step 6: create treemap
+    fig = go.Figure(go.Treemap(
+        ids=df['id'],
+        labels=df['label'],
+        parents=df['parent'],
+        values=df[var],
+        marker=dict(
+            colors=[color_dict.get(f, 'gray') for f in df[flag]],
+            line=dict(color='black', width=1)
+        ),
+        textinfo="label+value+percent parent",
+        texttemplate="%{label}<br>(%{value:.0f}, %{percentParent:.0%})",
+        textposition="middle center",
+        hoverinfo='none',  # <-- disables hover
+        branchvalues='total'
+    ))
+
+    fig.update_layout(
+        margin=dict(l=1, r=1, t=1, b=1),
+        template='plotly_dark',
+        height=500,
+        uniformtext=dict(minsize=8, mode='show')
+    )
+
+    # Step 7: compute total counts per flag, sort descending for title
+    flag_counts = df.groupby(flag, as_index=False)[var].sum().sort_values(var, ascending=False)
+    total_count = flag_counts[var].sum()
+    flag_summaries = []
+    for _, row in flag_counts.iterrows():
+        flag_name = row[flag]        # <- use a different variable
+        flag_count = row[var]
+        flag_frac = flag_count / total_count
+        color = color_dict.get(flag_name, 'gray')
+        flag_summaries.append(f"<span style='color:{color}'>{flag_name} ({int(flag_count)}, {flag_frac:.0%})</span>")
+
+    title_text = ", ".join(flag_summaries)
+
+    fig.update_layout(
+        margin=dict(l=1, r=1, t=20, b=1),  # top margin increased for title
+        template='plotly_dark',
+        font=dict(color='white', size=11),
+        height=560,
+        uniformtext=dict(minsize=8, mode='show'),
+        title=dict(
+            text=title_text,
+            x=0.5,
+            xanchor='center',
+            yanchor='top',
+            y=0.99,  # stick to the very top inside the margin
+            font=dict(size=16)
+        )
+    )
+
+    config = {'displayModeBar': False, 'responsive': True}
+    if save_path:    
+        pio.write_html(fig, file=save_path, config=config, include_plotlyjs='cdn')
 
     return fig.show(config=config)
