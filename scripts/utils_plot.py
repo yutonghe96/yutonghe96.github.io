@@ -6,6 +6,12 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from utils_processing import add_country_codes, format_days_to_ymwd
 
+BASE_FONT_SIZE = 18
+TITLE_FONT_SIZE = 24
+AXIS_TITLE_SIZE = 20
+LEGEND_FONT_SIZE = 18
+HOVER_FONT_SIZE = 16
+
 def plot_bar_time_series(df, select_type='travel', time_period='year', title='Countries Been', save_path=None):
 
     color_bar = 'royalblue'
@@ -74,8 +80,8 @@ def plot_bar_time_series(df, select_type='travel', time_period='year', title='Co
             name='Cumulative count',
             yaxis='y2',
             mode='lines+markers',
-            line=dict(color=color_line, width=3),
-            marker=dict(size=8, color=color_line),
+            line=dict(color=color_line, width=4),
+            marker=dict(size=10, color=color_line),
             hovertemplate='Year: %{x}<br>Cumulative: %{y}<extra></extra>'
         ))
 
@@ -100,8 +106,8 @@ def plot_bar_time_series(df, select_type='travel', time_period='year', title='Co
             name='Cumulative count',
             yaxis='y2',
             mode='lines+markers',
-            line=dict(color=color_line, width=3),
-            marker=dict(size=8, color=color_line),
+            line=dict(color=color_line, width=4),
+            marker=dict(size=10, color=color_line),
             hovertemplate='Year: %{x}<br>Cumulative: %{y}<extra></extra>'
         ))
 
@@ -112,26 +118,48 @@ def plot_bar_time_series(df, select_type='travel', time_period='year', title='Co
 
     # Layout
     fig.update_layout(
-        title=title,
-        xaxis=dict(title='Year', showgrid=False, zeroline=False),
+        title=dict(
+            text=title,
+            font=dict(size=TITLE_FONT_SIZE)
+        ),
+        font=dict(
+            size=BASE_FONT_SIZE
+        ),
+        xaxis=dict(
+            title=dict(text='Year', font=dict(size=AXIS_TITLE_SIZE)),
+            tickfont=dict(size=BASE_FONT_SIZE),
+            showgrid=False,
+            zeroline=False
+        ),
         yaxis=dict(
-            title='Count' if select_type == 'book' else 'Country count',
+            title=dict(
+                text='Count' if select_type == 'book' else 'Country count',
+                font=dict(size=AXIS_TITLE_SIZE)
+            ),
+            tickfont=dict(size=BASE_FONT_SIZE),
             showgrid=False,
             zeroline=False
         ),
         yaxis2=dict(
             title=dict(
                 text='Cumulative count' if select_type == 'book' else 'Cumulative country count',
-                font=dict(color=color_line)
+                font=dict(size=AXIS_TITLE_SIZE, color=color_line)
             ),
+            tickfont=dict(size=BASE_FONT_SIZE, color=color_line),
             overlaying='y',
             side='right',
             showgrid=False,
-            zeroline=False,
-            tickfont=dict(color=color_line)
+            zeroline=False
+        ),
+        legend=dict(
+            x=0.03,
+            y=0.98,
+            font=dict(size=LEGEND_FONT_SIZE)
+        ),
+        hoverlabel=dict(
+            font=dict(size=HOVER_FONT_SIZE)
         ),
         barmode='group',
-        legend=dict(x=0.03, y=0.98),
         bargap=0.3,
         template='plotly_dark'
     )
@@ -291,6 +319,10 @@ def create_map(
 
     return fig.show(config=config)
 
+BASE_FONT_SIZE = 18
+TITLE_FONT_SIZE = 22
+TREE_TEXT_SIZE = 18
+
 def create_tree(
         df,
         feat='genre',
@@ -392,7 +424,8 @@ def create_tree(
         textinfo="label+value+percent parent",
         texttemplate="%{label}<br>(%{value:.0f}, %{percentParent:.0%})",
         textposition="middle center",
-        hoverinfo='none',  # <-- disables hover
+        textfont=dict(size=TREE_TEXT_SIZE),
+        hoverinfo='none',
         branchvalues='total'
     ))
 
@@ -418,18 +451,24 @@ def create_tree(
     title_text = ", ".join(flag_summaries)
 
     fig.update_layout(
-        margin=dict(l=1, r=1, t=20, b=1),  # top margin increased for title
+        margin=dict(l=2, r=2, t=28, b=2),
         template='plotly_dark',
-        font=dict(color='white', size=11),
         height=height,
-        uniformtext=dict(minsize=8, mode='show'),
+        font=dict(
+            color='white',
+            size=BASE_FONT_SIZE
+        ),
+        uniformtext=dict(
+            minsize=14,     # ← prevents auto-shrinking
+            mode='show'
+        ),
         title=dict(
             text=title_text,
             x=0.5,
             xanchor='center',
             yanchor='top',
-            y=0.99,  # stick to the very top inside the margin
-            font=dict(size=16)
+            y=0.99,
+            font=dict(size=TITLE_FONT_SIZE)
         )
     )
 
