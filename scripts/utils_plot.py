@@ -6,13 +6,27 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from utils_processing import add_country_codes, format_days_to_ymwd
 
-BASE_FONT_SIZE = 18
-TITLE_FONT_SIZE = 24
-AXIS_TITLE_SIZE = 20
-LEGEND_FONT_SIZE = 18
-HOVER_FONT_SIZE = 16
-
-def plot_bar_time_series(df, select_type='travel', time_period='year', title='Countries Been', save_path=None):
+def plot_bar_time_series(
+        df, 
+        select_type='travel', 
+        time_period='year', 
+        title='Countries Been', 
+        font_size_dict=None,
+        save_path=None
+        ):
+    
+    if font_size_dict is not None:
+        BASE_FONT_SIZE = font_size_dict['base']
+        TITLE_FONT_SIZE = font_size_dict['title']
+        AXIS_TITLE_SIZE = font_size_dict['axis_title']
+        LEGEND_FONT_SIZE = font_size_dict['legend']
+        HOVER_FONT_SIZE = font_size_dict['hover']
+    else:
+        BASE_FONT_SIZE = 20
+        TITLE_FONT_SIZE = 26
+        AXIS_TITLE_SIZE = 22
+        LEGEND_FONT_SIZE = 20
+        HOVER_FONT_SIZE = 20
 
     color_bar = 'royalblue'
     color_line = 'darkorange'
@@ -133,7 +147,7 @@ def plot_bar_time_series(df, select_type='travel', time_period='year', title='Co
         ),
         yaxis=dict(
             title=dict(
-                text='Count' if select_type == 'book' else 'Country count',
+                text='Count',
                 font=dict(size=AXIS_TITLE_SIZE)
             ),
             tickfont=dict(size=BASE_FONT_SIZE),
@@ -142,7 +156,7 @@ def plot_bar_time_series(df, select_type='travel', time_period='year', title='Co
         ),
         yaxis2=dict(
             title=dict(
-                text='Cumulative count' if select_type == 'book' else 'Cumulative country count',
+                text='Cumulative count',
                 font=dict(size=AXIS_TITLE_SIZE, color=color_line)
             ),
             tickfont=dict(size=BASE_FONT_SIZE, color=color_line),
@@ -290,7 +304,6 @@ def create_map(
         paper_bgcolor="black",
         plot_bgcolor="black",
         margin=dict(l=0, r=0, t=0, b=0),
-        height=600,
         dragmode="pan",
         hovermode="closest",
     )
@@ -319,10 +332,6 @@ def create_map(
 
     return fig.show(config=config)
 
-BASE_FONT_SIZE = 18
-TITLE_FONT_SIZE = 22
-TREE_TEXT_SIZE = 18
-
 def create_tree(
         df,
         feat='genre',
@@ -331,9 +340,18 @@ def create_tree(
         threshold=0,
         threshold_global=False,
         color_dict={'Movie': 'royalblue', 'TV': 'gold', 'Other': 'white'},
-        height=560,
+        font_size_dict=None,
         save_path=None
         ):
+    
+    if font_size_dict is not None:
+        BASE_FONT_SIZE = font_size_dict['base']
+        TITLE_FONT_SIZE = font_size_dict['title']
+        TREE_TEXT_SIZE = font_size_dict['tree_text']
+    else:
+        BASE_FONT_SIZE = 20
+        TITLE_FONT_SIZE = 22
+        TREE_TEXT_SIZE = 20
     
     df_orig = df.copy()
     df_copy = df.copy()
@@ -432,7 +450,6 @@ def create_tree(
     fig.update_layout(
         margin=dict(l=1, r=1, t=1, b=1),
         template='plotly_dark',
-        height=500,
         uniformtext=dict(minsize=8, mode='show')
     )
 
@@ -453,7 +470,6 @@ def create_tree(
     fig.update_layout(
         margin=dict(l=2, r=2, t=28, b=2),
         template='plotly_dark',
-        height=height,
         font=dict(
             color='white',
             size=BASE_FONT_SIZE
