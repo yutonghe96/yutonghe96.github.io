@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from utils_processing import add_country_codes, format_days_to_ymwd
 
-def plot_bar_time_series(df, select_type='travel', time_period='year', title='Countries Been'):
+def plot_bar_time_series(df, select_type='travel', time_period='year', title='Countries Been', save_path=None):
 
     color_bar = 'royalblue'
     color_line = 'darkorange'
@@ -136,7 +136,29 @@ def plot_bar_time_series(df, select_type='travel', time_period='year', title='Co
         template='plotly_dark'
     )
 
-    fig.show()
+    config = {
+        "displayModeBar": True,        # show mode bar
+        "displaylogo": False,          # remove Plotly logo
+        "modeBarButtonsToRemove": [    # buttons to remove
+        "toImage",                     # download as PNG
+        #"zoom2d",                      # optional: keep zoom if you want
+        "pan2d",                       # optional: keep pan
+        "lasso2d", "select2d",
+        "autoScale2d", 
+        "hoverCompareCartesian",
+        "hoverClosestCartesian",
+        "toggleSpikelines",
+        "resetScale2d",                # remove default reset if you will keep your own
+        ],
+        "modeBarButtonsToAdd": [       # optional: add back only desired buttons
+        "zoomIn2d", "zoomOut2d", "resetScale2d"
+        ]
+    }
+
+    if save_path:
+        fig.write_html(save_path, include_plotlyjs="cdn", config=config)
+
+    return fig.show(config=config)
 
 def create_map(
     df_,
@@ -277,6 +299,7 @@ def create_tree(
         threshold=0,
         threshold_global=False,
         color_dict={'Movie': 'royalblue', 'TV': 'gold', 'Other': 'white'},
+        height=560,
         save_path=None
         ):
     
@@ -398,7 +421,7 @@ def create_tree(
         margin=dict(l=1, r=1, t=20, b=1),  # top margin increased for title
         template='plotly_dark',
         font=dict(color='white', size=11),
-        height=560,
+        height=height,
         uniformtext=dict(minsize=8, mode='show'),
         title=dict(
             text=title_text,
