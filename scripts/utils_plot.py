@@ -339,11 +339,13 @@ def create_tree(
         flag='flag',
         threshold=0,
         threshold_global=False,
+        group_flag=False,
         color_dict={'Movie': 'royalblue', 'TV': 'gold', 'Other': 'white'},
         font_size_dict=None,
         save_path=None
         ):
-    
+
+    # ------------------ Font sizes ------------------
     if font_size_dict is not None:
         BASE_FONT_SIZE = font_size_dict['base']
         TITLE_FONT_SIZE = font_size_dict['title']
@@ -352,20 +354,18 @@ def create_tree(
         BASE_FONT_SIZE = 20
         TITLE_FONT_SIZE = 22
         TREE_TEXT_SIZE = 20
-    
+
     df_orig = df.copy()
     df_copy = df.copy()
-    
-    # Step 0: aggregate low-value entries into "Other"
+
+    # ------------------ Threshold aggregation ------------------
     if threshold_global:
-        # Aggregate globally
         large_entries = df_copy[df_copy[var] >= threshold]
         small_entries_sum = df_copy[df_copy[var] < threshold][var].sum()
         if small_entries_sum > 0:
             other_row = {feat: 'Other', flag: 'Other', var: small_entries_sum}
             df_copy = pd.concat([large_entries, pd.DataFrame([other_row])], ignore_index=True)
     else:
-        # Aggregate per flag
         aggregated_rows = []
         for f, group in df_copy.groupby(flag):
             large_entries = group[group[var] >= threshold]
@@ -378,118 +378,134 @@ def create_tree(
 
     if 'Other' not in color_dict:
         color_dict['Other'] = 'gray'
-    
-    # Define min/max line length
+
+    # ------------------ Dynamic text wrapping ------------------
     min_line_length = 10
     max_line_length = 30
-
-    # Normalize count to 0-1
     count_min = df_copy[var].min()
     count_max = df_copy[var].max()
     norm_var = f'norm_{var}'
-    df_copy[norm_var] = (df_copy[var] - count_min) / (count_max - count_min)
-
-    # Compute dynamic line length
-    df_copy['line_length'] = df_copy[norm_var] * (max_line_length - min_line_length) + min_line_length
-    df_copy['line_length'] = df_copy['line_length'].astype(int)
+    if count_max > count_min:
+        df_copy[norm_var] = (df_copy[var] - count_min) / (count_max - count_min)
+    else:
+        df_copy[norm_var] = 1.0
+    df_copy['line_length'] = (df_copy[norm_var] * (max_line_length - min_line_length) + min_line_length).astype(int)
 
     def wrap_feat(row):
-        genre = row[feat]
-        line_length = row['line_length']
-        
-        # If the whole genre fits, return as is
-        if len(genre) <= line_length:
-            return genre
-        
-        # Split into words
-        words = genre.split(' ')
+        text = row[feat]
+        max_len = row['line_length']
+        if len(text) <= max_len:
+            return text
+        words = text.split(' ')
         lines = []
-        current_line = ''
-        
+        current = ''
         for word in words:
-            # If adding this word exceeds line_length
-            if len(current_line) + len(word) + (1 if current_line else 0) > line_length:
-                # Push current line to lines
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
+            if len(current) + len(word) + (1 if current else 0) > max_len:
+                if current:
+                    lines.append(current)
+                current = word
             else:
-                # Append word to current line
-                current_line = f"{current_line} {word}" if current_line else word
-        
-        # Add last line
-        if current_line:
-            lines.append(current_line)
-        
+                current = f"{current} {word}" if current else word
+        if current:
+            lines.append(current)
         return '<br>'.join(lines)
-    
+
     feat_wrapped = f'{feat}_wrapped'
     df_copy[feat_wrapped] = df_copy.apply(wrap_feat, axis=1)
-    df_copy['id'] = df_copy[flag] + ' | ' + df_copy[feat_wrapped]  # unique per flag+genre
-    df_copy['parent'] = ""  # flat hierarchy
-    df_copy['label'] = df_copy[feat_wrapped]  # show only genre text
 
-    # Step 6: create treemap
+    # ------------------ Hierarchy ------------------
+    total_sum = df_orig[var].sum()
+    if group_flag:
+        # ----- children -----
+        df_copy['flag_id'] = df_copy[flag].astype(str)
+        df_copy['id'] = df_copy['flag_id'] + ' | ' + df_copy[feat_wrapped]
+        df_copy['parent'] = df_copy['flag_id']
+        df_copy['label'] = df_copy[feat_wrapped]
+
+        # ----- parent blocks -----
+        parent_df = df_copy.groupby('flag_id', as_index=False)[var].sum()
+        parent_df[flag] = parent_df['flag_id']
+        parent_df['frac'] = parent_df[var] / total_sum if total_sum > 0 else 0
+        parent_df['id'] = parent_df['flag_id']
+        parent_df['parent'] = ""
+        parent_df['label'] = parent_df.apply(
+            lambda r: f"{r['flag_id']} ({int(r[var])}, {r['frac']:.0%})",
+            axis=1
+        )
+
+        # ------------------ Add <br> padding to parent labels to move text toward top ------------------
+        def pad_parent_label(row, n_lines=2):
+            return '<br>'*n_lines + row['label']
+
+        parent_df['label'] = parent_df.apply(lambda r: pad_parent_label(r), axis=1)
+        df_copy = pd.concat([parent_df, df_copy], ignore_index=True)
+    else:
+        df_copy['id'] = df_copy[flag] + ' | ' + df_copy[feat_wrapped]
+        df_copy['parent'] = ""
+        df_copy['label'] = df_copy[feat_wrapped]
+
+    # ------------------ Colors ------------------
+    df_copy['_color'] = df_copy[flag].map(color_dict).fillna('gray')
+
+    # ------------------ Treemap ------------------
     fig = go.Figure(go.Treemap(
         ids=df_copy['id'],
         labels=df_copy['label'],
         parents=df_copy['parent'],
         values=df_copy[var],
         marker=dict(
-            colors=[color_dict.get(f, 'gray') for f in df_copy[flag]],
+            colors=df_copy['_color'],
             line=dict(color='black', width=1)
         ),
-        textinfo="label+value+percent parent",
-        texttemplate="%{label}<br>(%{value:.0f}, %{percentParent:.0%})",
+        textinfo="label+value+percent root",
+        texttemplate="%{label}<br>(%{value:.0f}, %{percentRoot:.0%})",
         textposition="middle center",
         textfont=dict(size=TREE_TEXT_SIZE),
         hoverinfo='none',
         branchvalues='total'
     ))
 
-    fig.update_layout(
-        margin=dict(l=1, r=1, t=1, b=1),
-        template='plotly_dark',
-        uniformtext=dict(minsize=8, mode='show')
-    )
-
-    # Step 7: compute total counts per flag, sort descending for title
-    flag_counts_orig = df_orig.groupby(flag, as_index=False)[var].sum().sort_values(var, ascending=False)
-    total_count_orig = flag_counts_orig[var].sum()
-
-    flag_summaries = []
-    for _, row in flag_counts_orig.iterrows():
-        flag_name = row[flag]
-        flag_count = row[var]
-        flag_frac = flag_count / total_count_orig
-        color = color_dict.get(flag_name, 'gray')
-        flag_summaries.append(f"<span style='color:{color}'>{flag_name} ({int(flag_count)}, {flag_frac:.0%})</span>")
-
-    title_text = ", ".join(flag_summaries)
-
-    fig.update_layout(
-        margin=dict(l=2, r=2, t=28, b=2),
-        template='plotly_dark',
-        font=dict(
-            color='white',
-            size=BASE_FONT_SIZE
-        ),
-        uniformtext=dict(
-            minsize=14,     # ← prevents auto-shrinking
-            mode='show'
-        ),
-        title=dict(
-            text=title_text,
-            x=0.5,
-            xanchor='center',
-            yanchor='top',
-            y=0.99,
-            font=dict(size=TITLE_FONT_SIZE)
+    # ------------------ Title (flat only) ------------------
+    if not group_flag:
+        flag_counts_orig = (
+            df_orig.groupby(flag, as_index=False)[var]
+            .sum()
+            .sort_values(var, ascending=False)
         )
+        total_count_orig = flag_counts_orig[var].sum()
+        flag_summaries = []
+        for _, row in flag_counts_orig.iterrows():
+            name = row[flag]
+            count = row[var]
+            frac = count / total_count_orig if total_count_orig > 0 else 0
+            color = color_dict.get(name, 'gray')
+            flag_summaries.append(
+                f"<span style='color:{color}'>{name} ({int(count)}, {frac:.0%})</span>"
+            )
+        fig.update_layout(
+            title=dict(
+                text=", ".join(flag_summaries),
+                x=0.5,
+                xanchor='center',
+                y=0.99,
+                yanchor='top',
+                font=dict(size=TITLE_FONT_SIZE)
+            )
+        )
+    
+    t_margin=6 if not group_flag else 0
+    
+    # ------------------ Layout ------------------
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=t_margin, b=0),
+        template='plotly_dark',
+        font=dict(color='white', size=BASE_FONT_SIZE),
+        uniformtext=dict(minsize=TREE_TEXT_SIZE, mode='show'),
     )
 
-    config = {'displayModeBar': False, 'responsive': True}
-    if save_path:    
+    # ------------------ Output ------------------
+    config = {'staticPlot': True}
+    if save_path:
         pio.write_html(fig, file=save_path, config=config, include_plotlyjs='cdn')
 
     return fig.show(config=config)
