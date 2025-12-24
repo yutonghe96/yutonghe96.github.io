@@ -1344,6 +1344,7 @@ input, select, textarea {
 		#header nav ul {
 			display: flex;
 			margin-bottom: 0;
+			justify-content: center; /* centers the last row */
 			list-style: none;
 			padding-left: 0;
 			border: solid 1px #ffffff;
@@ -1353,11 +1354,11 @@ input, select, textarea {
 		}
 
 				#header nav ul li {
-					flex: 0 0 25%; /* fixed width: 4 per row */
+					flex: 0 0 auto; /* fixed width: 4 per row */
 					box-sizing: border-box;
 					border: 1px solid #ffffff; /* border on each tab */
-					border-left: none; /* remove left border if you want seamless edges */
-					border-top: none; /* remove top border except for first row if needed */
+					/*border-left: none; /* remove left border if you want seamless edges */
+					/*border-top: none; /* remove top border except for first row if needed */
 					padding: 0;
 					margin: 0;
 				  }
