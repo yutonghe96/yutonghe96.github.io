@@ -499,7 +499,7 @@ def create_tree(
         )
     )
 
-    t_margin=4 if not group_flag else 0
+    t_margin=6 if not group_flag else 0
     
     # ------------------ Layout ------------------
     fig.update_layout(
