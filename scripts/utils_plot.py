@@ -340,6 +340,7 @@ def create_tree(
         threshold=0,
         threshold_global=False,
         group_flag=False,
+        title=None,
         color_dict={'Movie': 'royalblue', 'TV': 'gold', 'Other': 'white'},
         font_size_dict=None,
         save_path=None
@@ -466,7 +467,7 @@ def create_tree(
     ))
 
     # ------------------ Title (flat only) ------------------
-    if not group_flag:
+    if title is None and not group_flag:
         flag_counts_orig = (
             df_orig.groupby(flag, as_index=False)[var]
             .sum()
@@ -482,18 +483,23 @@ def create_tree(
             flag_summaries.append(
                 f"<span style='color:{color}'>{name} ({int(count)}, {frac:.0%})</span>"
             )
-        fig.update_layout(
-            title=dict(
-                text=", ".join(flag_summaries),
-                x=0.5,
-                xanchor='center',
-                y=0.99,
-                yanchor='top',
-                font=dict(size=TITLE_FONT_SIZE)
-            )
+        title = ", ".join(flag_summaries)
+
+    else:
+        title = title
+
+    fig.update_layout(
+        title=dict(
+        text=title,
+        x=0.5,
+        xanchor='center',
+        y=0.99,
+        yanchor='top',
+        font=dict(size=TITLE_FONT_SIZE)
         )
-    
-    t_margin=6 if not group_flag else 0
+    )
+
+    t_margin=4 if not group_flag else 0
     
     # ------------------ Layout ------------------
     fig.update_layout(
