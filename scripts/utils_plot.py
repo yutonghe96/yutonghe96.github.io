@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import plotly.graph_objects as go
 import plotly.io as pio
+import re
 from utils_processing import add_country_codes, format_days_to_ymwd
 
 def plot_bar_time_series(
@@ -202,6 +203,41 @@ def plot_bar_time_series(
 
     return fig.show(config=config)
 
+def _parse_coords(c):
+    if c is None or pd.isna(c):
+        return pd.Series([np.nan, np.nan])
+
+    # (lat, lon) tuple or list
+    if isinstance(c, (list, tuple)) and len(c) == 2:
+        return pd.Series([float(c[0]), float(c[1])])
+
+    # dict form
+    if isinstance(c, dict):
+        return pd.Series([c.get("lat"), c.get("lon")])
+
+    # string formats
+    if isinstance(c, str):
+        parts = [p.strip() for p in c.split(",")]
+        if len(parts) != 2:
+            return pd.Series([np.nan, np.nan])
+
+        def _parse_part(p):
+            # extract numeric value
+            val = float(re.findall(r"[-+]?\d*\.\d+|\d+", p)[0])
+            # hemisphere
+            if re.search(r"[SW]", p, re.IGNORECASE):
+                val = -val
+            return val
+
+        try:
+            lat = _parse_part(parts[0])
+            lon = _parse_part(parts[1])
+            return pd.Series([lat, lon])
+        except Exception:
+            return pd.Series([np.nan, np.nan])
+
+    return pd.Series([np.nan, np.nan])
+
 def create_map(
     df_,
     var="total_days",
@@ -209,86 +245,129 @@ def create_map(
     bins=None,
     color=None,
     projection_type="orthographic",
-    tooltip_mode='calendar',  # 'calendar' or 'raw'
+    tooltip_mode='calendar',
+    level="country",
     save_path=None
 ):
 
-    # ---- Ensure ISO codes ----
-    df = add_country_codes(df_.copy())
-    df = df.dropna(subset=[code_convention, var])
+    # =========================
+    # COUNTRY LEVEL (DEFAULT)
+    # =========================
+    if level == "country":
 
-    # ---- Binning ----
-    if bins is None:
-        bins = np.linspace(df[var].min(), df[var].max(), 5)
+        # ---- Ensure ISO codes ----
+        NUM_COLS = df_.select_dtypes(include='number').columns.tolist()
+        df_ = df_.groupby('country')[NUM_COLS].sum().reset_index()
+        df = add_country_codes(df_.copy())
+        df = df.dropna(subset=[code_convention, var])
 
-    n_bins = len(bins) - 1
-    df["bin"] = pd.cut(
-        df[var],
-        bins=bins,
-        include_lowest=True,
-        labels=False
-    ).astype(int)
+        # ---- Binning ----
+        if bins is None:
+            bins = np.linspace(df[var].min(), df[var].max(), 5)
 
-    # ---- Colors ----
-    if color is None:
-        # Default discrete Set1
-        colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"][:n_bins]
-    elif isinstance(color, list):
-        # Use provided discrete colors
-        colors = color[:n_bins]
-    else:
-        # Single color: create a log-scaled gradient
-        # Convert base color to RGB
-        base_rgb = np.array(mcolors.to_rgb(color))
-        # Log scale based on bin midpoints
-        bin_mids = np.array([bins[i]+(bins[i+1]-bins[i])/2 for i in range(n_bins)])
-        log_norm = (np.log(bin_mids) - np.log(bin_mids.min())) / (np.log(bin_mids.max()) - np.log(bin_mids.min()))
-        # Darker = larger values
-        colors = [mcolors.to_hex(base_rgb * (0.3 + 0.7*(1-log_val))) for log_val in log_norm]
+        n_bins = len(bins) - 1
+        df = df[df[var].notna()].copy()
+        df["bin"] = pd.cut(df[var], bins=bins, include_lowest=True, labels=False)
+        df["bin"] = df["bin"].astype("Int64")  # nullable integer
 
-    # ---- Discrete colorscale ----
-    colorscale = []
-    for i, c in enumerate(colors):
-        colorscale.append([i / n_bins, c])
-        colorscale.append([(i + 1) / n_bins, c])
+        # ---- Colors ----
+        if color is None:
+            colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"][:n_bins]
+        elif isinstance(color, list):
+            colors = color[:n_bins]
+        else:
+            base_rgb = np.array(mcolors.to_rgb(color))
+            bin_mids = np.array([bins[i] + (bins[i+1] - bins[i]) / 2 for i in range(n_bins)])
+            log_norm = ((np.log(bin_mids) - np.log(bin_mids.min())) / (np.log(bin_mids.max()) - np.log(bin_mids.min())))
+            colors = [mcolors.to_hex(base_rgb * (0.3 + 0.7*(1 - log_val))) for log_val in log_norm]
 
-    # ---- Tooltip ----
-    def _tooltip(row):
-        country_name = row.get('country', row[code_convention])
-        value = row[var]
-        if tooltip_mode == 'raw':
-            return f"{country_name}: {value}"
-        else:  # 'calendar' mode
-            return f"{country_name}: {format_days_to_ymwd(value)}"
+        # ---- Discrete colorscale ----
+        colorscale = []
+        for i, c in enumerate(colors):
+            colorscale.append([i / n_bins, c])
+            colorscale.append([(i + 1) / n_bins, c])
 
-    hover_text = df.apply(_tooltip, axis=1)
+        # ---- Tooltip ----
+        def _tooltip(row):
+            country_name = row.get('country', row[code_convention])
+            value = row[var]
+            if tooltip_mode == 'raw':
+                return f"{country_name}: {value}"
+            else:
+                return f"{country_name}: {format_days_to_ymwd(value)}"
 
-    # ---- Choropleth ----
-    fig = go.Figure(
-        go.Choropleth(
-            locations=df[code_convention],
-            z=df["bin"],
-            locationmode="ISO-3",
-            text=hover_text,
-            hoverinfo="text",
-            colorscale=colorscale,
-            zmin=0,
-            zmax=n_bins,
-            marker_line_width=0,
-            showscale=False
-        )
-    )
+        hover_text = df.apply(_tooltip, axis=1)
 
-    fig.update_traces(
-        hoverlabel=dict(
-            bgcolor='black',
+        # ---- Choropleth ----
+        fig = go.Figure(
+            go.Choropleth(
+                locations=df[code_convention],
+                z=df["bin"],
+                locationmode="ISO-3",
+                text=hover_text,
+                hoverinfo="text",
+                colorscale=colorscale,
+                zmin=0,
+                zmax=n_bins,
+                marker_line_width=0,
+                showscale=False
             )
         )
 
-    # ---- Geo config ----
+    # =========================
+    # CITY LEVEL (BUBBLE MAP)
+    # =========================
+    elif level == "city":
+
+        df = df_.copy()
+        df = df.dropna(subset=["city", "coordinates", var])
+
+        # ---- Extract lat / lon ----
+        df[["lat", "lon"]] = df["coordinates"].apply(_parse_coords)
+        df = df.dropna(subset=["lat", "lon"])
+
+        # ---- Log-scaled bubble size ----
+        size_raw = np.log1p(df[var])
+        size = 5 + 30 * (size_raw - size_raw.min()) / (size_raw.max() - size_raw.min())
+
+        # ---- Tooltip ----
+        def _tooltip(row):
+            value = row[var]
+            if tooltip_mode == "raw":
+                return f"{row['city']}: {value}"
+            else:
+                return f"{row['city']}: {format_days_to_ymwd(value)}"
+
+        hover_text = df.apply(_tooltip, axis=1)
+
+        fig = go.Figure(
+            go.Scattergeo(
+                lon=df["lon"],
+                lat=df["lat"],
+                text=hover_text,
+                hoverinfo="text",
+                mode="markers",
+                marker=dict(
+                    size=size,
+                    color=color or "#e41a1c",
+                    opacity=0.75,
+                    line=dict(width=0)
+                )
+            )
+        )
+
+    else:
+        raise ValueError("level must be 'country' or 'city'")
+
+    # =========================
+    # COMMON STYLING
+    # =========================
+    fig.update_traces(
+        hoverlabel=dict(bgcolor="black")
+    )
+
     fig.update_geos(
         projection_type=projection_type,
-        #resolution=50,
         showland=True,
         landcolor="white",
         showocean=True,
@@ -299,7 +378,6 @@ def create_map(
         bgcolor="black",
     )
 
-    # ---- Layout ----
     fig.update_layout(
         paper_bgcolor="black",
         plot_bgcolor="black",
@@ -309,21 +387,19 @@ def create_map(
     )
 
     config = {
-        "displayModeBar": True,        # show mode bar
-        "displaylogo": False,          # remove Plotly logo
-        "modeBarButtonsToRemove": [    # buttons to remove
-        "toImage",                     # download as PNG
-        "zoom2d",                      # optional: keep zoom if you want
-        "pan2d",                       # optional: keep pan
-        "lasso2d", "select2d",
-        "autoScale2d", 
-        "hoverCompareCartesian",
-        "hoverClosestCartesian",
-        "toggleSpikelines",
-        "resetScale2d",                # remove default reset if you will keep your own
+        "displayModeBar": True,
+        "displaylogo": False,
+        "modeBarButtonsToRemove": [
+            "toImage", "zoom2d", "pan2d",
+            "lasso2d", "select2d",
+            "autoScale2d",
+            "hoverCompareCartesian",
+            "hoverClosestCartesian",
+            "toggleSpikelines",
+            "resetScale2d",
         ],
-        "modeBarButtonsToAdd": [       # optional: add back only desired buttons
-        "zoomIn2d", "zoomOut2d", "resetScale2d"
+        "modeBarButtonsToAdd": [
+            "zoomIn2d", "zoomOut2d", "resetScale2d"
         ]
     }
 
