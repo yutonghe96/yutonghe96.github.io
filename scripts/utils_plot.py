@@ -328,7 +328,7 @@ def create_map(
 
         # ---- Log-scaled bubble size ----
         size_raw = np.log1p(df[var])
-        size = 5 + 30 * (size_raw - size_raw.min()) / (size_raw.max() - size_raw.min())
+        size = 4 + 30 * (size_raw - size_raw.min()) / (size_raw.max() - size_raw.min())
 
         # ---- Tooltip ----
         def _tooltip(row):
