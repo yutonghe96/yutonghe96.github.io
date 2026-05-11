@@ -238,6 +238,61 @@ def _parse_coords(c):
 
     return pd.Series([np.nan, np.nan])
 
+_HATCH_PLACEHOLDER = "#ff00ff"
+
+_HATCH_POST_SCRIPT = r"""
+(function(){
+  var gd = document.getElementById('{plot_id}');
+  if (!gd) return;
+  var NS = 'http://www.w3.org/2000/svg';
+  var hatchColor = '__HATCH_COLOR__';
+  function ensurePattern(svg) {
+    var defs = svg.querySelector('defs');
+    if (!defs) {
+      defs = document.createElementNS(NS, 'defs');
+      svg.insertBefore(defs, svg.firstChild);
+    }
+    if (!defs.querySelector('#hatch-planned')) {
+      var p = document.createElementNS(NS, 'pattern');
+      p.setAttribute('id', 'hatch-planned');
+      p.setAttribute('patternUnits', 'userSpaceOnUse');
+      p.setAttribute('width', '8');
+      p.setAttribute('height', '8');
+      p.setAttribute('patternTransform', 'rotate(45)');
+      var bg = document.createElementNS(NS, 'rect');
+      bg.setAttribute('width', '8'); bg.setAttribute('height', '8');
+      bg.setAttribute('fill', 'white');
+      var ln = document.createElementNS(NS, 'line');
+      ln.setAttribute('x1', '0'); ln.setAttribute('y1', '0');
+      ln.setAttribute('x2', '0'); ln.setAttribute('y2', '8');
+      ln.setAttribute('stroke', hatchColor);
+      ln.setAttribute('stroke-width', '3');
+      p.appendChild(bg); p.appendChild(ln);
+      defs.appendChild(p);
+    }
+  }
+  var MAGENTA = /(?:rgb\(\s*255\s*,\s*0\s*,\s*255\s*\)|#ff00ff)/i;
+  function applyHatch() {
+    var svgs = gd.querySelectorAll('svg');
+    svgs.forEach(function(svg){ ensurePattern(svg); });
+    var paths = gd.querySelectorAll('path.choroplethlocation, g.choropleth path, path');
+    paths.forEach(function(p){
+      var style = p.getAttribute('style') || '';
+      var fillAttr = p.getAttribute('fill') || '';
+      var computed = '';
+      try { computed = window.getComputedStyle(p).fill || ''; } catch(e){}
+      if (MAGENTA.test(style) || MAGENTA.test(fillAttr) || MAGENTA.test(computed)) {
+        p.style.fill = 'url(#hatch-planned)';
+      }
+    });
+  }
+  if (gd.on) { gd.on('plotly_afterplot', applyHatch); }
+  setTimeout(applyHatch, 100);
+  setTimeout(applyHatch, 600);
+})();
+"""
+
+
 def create_map(
     df_,
     var="total_days",
@@ -247,8 +302,11 @@ def create_map(
     projection_type="orthographic",
     tooltip_mode='calendar',
     level="country",
+    df_planned=None,
     save_path=None
 ):
+
+    hatch_needed = False
 
     # =========================
     # COUNTRY LEVEL (DEFAULT)
@@ -314,6 +372,37 @@ def create_map(
             )
         )
 
+        # ---- Planned-only countries: hatched fill ----
+        if df_planned is not None and not df_planned.empty:
+            P_NUM = df_planned.select_dtypes(include='number').columns.tolist()
+            dfp = df_planned.groupby('country')[P_NUM].sum().reset_index()
+            dfp = add_country_codes(dfp)
+            dfp = dfp.dropna(subset=[code_convention, var])
+            been_codes = set(df[code_convention].dropna())
+            dfp = dfp[~dfp[code_convention].isin(been_codes)]
+            if not dfp.empty:
+                hatch_needed = True
+                hover_planned = dfp.apply(
+                    lambda r: (f"{r['country']} (planned): {r[var]}"
+                               if tooltip_mode == 'raw'
+                               else f"{r['country']} (planned): {format_days_to_ymwd(r[var])}"),
+                    axis=1
+                )
+                fig.add_trace(
+                    go.Choropleth(
+                        locations=dfp[code_convention],
+                        z=[1] * len(dfp),
+                        locationmode="ISO-3",
+                        text=hover_planned,
+                        hoverinfo="text",
+                        colorscale=[[0, _HATCH_PLACEHOLDER], [1, _HATCH_PLACEHOLDER]],
+                        zmin=0,
+                        zmax=1,
+                        marker_line_width=0,
+                        showscale=False,
+                    )
+                )
+
     # =========================
     # CITY LEVEL (BUBBLE MAP)
     # =========================
@@ -321,40 +410,88 @@ def create_map(
 
         df = df_.copy()
         df = df.dropna(subset=["city", "coordinates", var])
-
-        # ---- Extract lat / lon ----
         df[["lat", "lon"]] = df["coordinates"].apply(_parse_coords)
         df = df.dropna(subset=["lat", "lon"])
+        df_b = df[['city', 'coordinates', 'lat', 'lon', var]].rename(columns={var: 'been'})
 
-        # ---- Log-scaled bubble size ----
-        size_raw = np.log1p(df[var])
-        size = 4 + 30 * (size_raw - size_raw.min()) / (size_raw.max() - size_raw.min())
+        if df_planned is not None and not df_planned.empty:
+            dfp = df_planned.copy().dropna(subset=["city", "coordinates", var])
+            dfp[["lat", "lon"]] = dfp["coordinates"].apply(_parse_coords)
+            dfp = dfp.dropna(subset=["lat", "lon"])
+            df_p = dfp[['city', 'coordinates', 'lat', 'lon', var]].rename(columns={var: 'planned'})
+            merged = pd.merge(df_b, df_p, on=['city', 'coordinates', 'lat', 'lon'], how='outer')
+        else:
+            merged = df_b.copy()
+            merged['planned'] = 0.0
 
-        # ---- Tooltip ----
-        def _tooltip(row):
-            value = row[var]
-            if tooltip_mode == "raw":
-                return f"{row['city']}: {value}"
-            else:
-                return f"{row['city']}: {format_days_to_ymwd(value)}"
+        merged['been'] = merged['been'].fillna(0.0)
+        merged['planned'] = merged['planned'].fillna(0.0)
+        merged['total'] = merged['been'] + merged['planned']
 
-        hover_text = df.apply(_tooltip, axis=1)
+        # ---- Shared log-scaled size across union ----
+        size_raw = np.log1p(merged['total'])
+        sr_min, sr_max = float(size_raw.min()), float(size_raw.max())
+        def _size(v):
+            if v is None or pd.isna(v) or v <= 0:
+                return 0.0
+            r = np.log1p(v)
+            if sr_max > sr_min:
+                return float(4 + 30 * (r - sr_min) / (sr_max - sr_min))
+            return 10.0
+        merged['size_been'] = merged['been'].apply(_size)
+        merged['size_total'] = merged['total'].apply(_size)
 
-        fig = go.Figure(
-            go.Scattergeo(
-                lon=df["lon"],
-                lat=df["lat"],
-                text=hover_text,
-                hoverinfo="text",
-                mode="markers",
-                marker=dict(
-                    size=size,
-                    color=color or "#e41a1c",
-                    opacity=0.75,
-                    line=dict(width=0)
+        solid = merged[merged['been'] > 0].copy()
+        rings = merged[merged['planned'] > 0].copy()
+
+        def _tt_solid(row):
+            v = row['been']
+            return f"{row['city']}: {v}" if tooltip_mode == 'raw' else f"{row['city']}: {format_days_to_ymwd(v)}"
+
+        def _tt_ring(row):
+            if tooltip_mode == 'raw':
+                if row['been'] > 0:
+                    return f"{row['city']}: {row['been']} been + {row['planned']} planned = {row['total']} total"
+                return f"{row['city']} (planned): {row['planned']}"
+            if row['been'] > 0:
+                return (f"{row['city']}: {format_days_to_ymwd(row['been'])} been + "
+                        f"{format_days_to_ymwd(row['planned'])} planned = {format_days_to_ymwd(row['total'])} total")
+            return f"{row['city']} (planned): {format_days_to_ymwd(row['planned'])}"
+
+        marker_color = color or "#e41a1c"
+        fig = go.Figure()
+        if not rings.empty:
+            fig.add_trace(
+                go.Scattergeo(
+                    lon=rings['lon'], lat=rings['lat'],
+                    text=rings.apply(_tt_ring, axis=1),
+                    hoverinfo="text",
+                    mode="markers",
+                    marker=dict(
+                        size=rings['size_total'],
+                        color='rgba(0,0,0,0)',
+                        line=dict(color=marker_color, width=2),
+                        opacity=1.0,
+                    ),
+                    name='planned',
                 )
             )
-        )
+        if not solid.empty:
+            fig.add_trace(
+                go.Scattergeo(
+                    lon=solid['lon'], lat=solid['lat'],
+                    text=solid.apply(_tt_solid, axis=1),
+                    hoverinfo="text",
+                    mode="markers",
+                    marker=dict(
+                        size=solid['size_been'],
+                        color=marker_color,
+                        opacity=0.75,
+                        line=dict(width=0),
+                    ),
+                    name='been',
+                )
+            )
 
     else:
         raise ValueError("level must be 'country' or 'city'")
@@ -384,6 +521,7 @@ def create_map(
         margin=dict(l=0, r=0, t=0, b=0),
         dragmode="pan",
         hovermode="closest",
+        showlegend=False,
     )
 
     config = {
@@ -404,7 +542,11 @@ def create_map(
     }
 
     if save_path:
-        fig.write_html(save_path, include_plotlyjs="cdn", config=config)
+        write_kwargs = dict(include_plotlyjs="cdn", config=config)
+        if hatch_needed:
+            hatch_color = color if isinstance(color, str) else "royalblue"
+            write_kwargs['post_script'] = _HATCH_POST_SCRIPT.replace('__HATCH_COLOR__', hatch_color)
+        fig.write_html(save_path, **write_kwargs)
 
     return fig.show(config=config)
 

@@ -4,6 +4,27 @@ import pycountry
 import country_converter as coco
 from collections import Counter
 
+def split_been_planned(df_verbose, today=None):
+    today = pd.Timestamp(today).normalize() if today is not None else pd.Timestamp.today().normalize()
+    df = df_verbose.copy()
+    df['start_date'] = pd.to_datetime(df['start_date'])
+    df['end_date'] = pd.to_datetime(df['end_date'])
+
+    def classify(row):
+        s, e = row['start_date'], row['end_date']
+        if e <= today:
+            return 'been'
+        if s > today:
+            return 'planned'
+        past_days = (today - s).days
+        future_days = (e - today).days
+        return 'been' if past_days >= future_days else 'planned'
+
+    status = df.apply(classify, axis=1)
+    df_been = df[status == 'been'].copy().reset_index(drop=True)
+    df_planned = df[status == 'planned'].copy().reset_index(drop=True)
+    return df_been, df_planned
+
 def transform_verbose_to_calendar(df, save=False):
     # Step 1: Build date → list of (row_id, start, end, country, city, coordinates)
     date_to_entries = {}
