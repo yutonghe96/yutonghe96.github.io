@@ -5,24 +5,41 @@ import country_converter as coco
 from collections import Counter
 
 def split_been_planned(df_verbose, today=None):
+    
     today = pd.Timestamp(today).normalize() if today is not None else pd.Timestamp.today().normalize()
+
     df = df_verbose.copy()
     df['start_date'] = pd.to_datetime(df['start_date'])
     df['end_date'] = pd.to_datetime(df['end_date'])
 
-    def classify(row):
-        s, e = row['start_date'], row['end_date']
-        if e <= today:
-            return 'been'
-        if s > today:
-            return 'planned'
-        past_days = (today - s).days
-        future_days = (e - today).days
-        return 'been' if past_days >= future_days else 'planned'
+    been_rows = []
+    planned_rows = []
 
-    status = df.apply(classify, axis=1)
-    df_been = df[status == 'been'].copy().reset_index(drop=True)
-    df_planned = df[status == 'planned'].copy().reset_index(drop=True)
+    for _, row in df.iterrows():
+        s = row['start_date']
+        e = row['end_date']
+        # Entirely in the past
+        if e < today:
+            been_rows.append(row.copy())
+        # Entirely in the future
+        elif s > today:
+            planned_rows.append(row.copy())
+        # Trip spans today -> split into two rows
+        else:
+            # Past/current portion
+            if s <= today:
+                been_row = row.copy()
+                been_row['end_date'] = today
+                been_rows.append(been_row)
+            # Future portion
+            if e > today:
+                planned_row = row.copy()
+                planned_row['start_date'] = today
+                planned_rows.append(planned_row)
+
+    df_been = pd.DataFrame(been_rows).reset_index(drop=True)
+    df_planned = pd.DataFrame(planned_rows).reset_index(drop=True)
+
     return df_been, df_planned
 
 def transform_verbose_to_calendar(df, save=False):
