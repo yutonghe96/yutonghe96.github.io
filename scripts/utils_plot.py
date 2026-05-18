@@ -199,7 +199,12 @@ def plot_bar_time_series(
     }
 
     if save_path:
-        fig.write_html(save_path, include_plotlyjs="cdn", config=config)
+        fig.write_html(
+            save_path,
+            include_plotlyjs="cdn",
+            config=config,
+            post_script=_AXIS_TOGGLE_SCRIPT,
+        )
 
     return fig.show(config=config)
 
@@ -497,6 +502,83 @@ _RESIZE_POST_SCRIPT = r"""
 """
 
 
+_AXIS_TOGGLE_SCRIPT = r"""
+(function(){
+  var gd = document.getElementById('{plot_id}');
+  if (!gd) return;
+  function isOn(t){ return t.visible === true || t.visible === undefined; }
+  function refresh(){
+    if (!gd.data || !window.Plotly) return;
+    var left = false, right = false;
+    gd.data.forEach(function(t){
+      if (!isOn(t)) return;
+      if (t.yaxis === 'y2') right = true;
+      else left = true;
+    });
+    var update = {};
+    var L = (gd.layout && gd.layout.yaxis && gd.layout.yaxis.visible !== false);
+    var R = (gd.layout && gd.layout.yaxis2 && gd.layout.yaxis2.visible !== false);
+    if (L !== left)  update['yaxis.visible']  = left;
+    if (R !== right) update['yaxis2.visible'] = right;
+    if (Object.keys(update).length) window.Plotly.relayout(gd, update);
+  }
+  if (gd.on) {
+    gd.on('plotly_restyle', function(){ setTimeout(refresh, 0); });
+    gd.on('plotly_legenddoubleclick', function(){ setTimeout(refresh, 50); });
+  }
+  setTimeout(refresh, 300);
+})();
+"""
+
+
+_RESET_HOOK_SCRIPT = r"""
+(function(){
+  var gd = document.getElementById('{plot_id}');
+  if (!gd) return;
+  function fullReset(){
+    if (!window.Plotly) return;
+    return window.Plotly.relayout(gd, {
+      'geo.center.lon': 0,
+      'geo.center.lat': 0,
+      'geo.projection.rotation.lon': 0,
+      'geo.projection.rotation.lat': 0,
+      'geo.projection.rotation.roll': 0,
+      'geo.projection.scale': 1,
+      'geo.lonaxis.range': null,
+      'geo.lataxis.range': null
+    });
+  }
+  function attach(){
+    var selectors = [
+      '[data-attr="resetDefault"]',
+      '[data-attr="resetGeo"]',
+      '[data-attr="resetScale"]',
+      '[data-attr="zoomDefault"]',
+      '[data-title="Reset"]',
+      '[data-title="Reset axes"]',
+      '[data-title="Reset view"]',
+      '[data-val="reset"]'
+    ];
+    var buttons = gd.querySelectorAll(selectors.join(','));
+    buttons.forEach(function(btn){
+      if (btn.__fullResetHooked) return;
+      btn.__fullResetHooked = true;
+      btn.addEventListener('click', function(e){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        fullReset();
+      }, true);
+    });
+  }
+  setTimeout(attach, 300);
+  setTimeout(attach, 1200);
+  if (gd.on) {
+    gd.on('plotly_afterplot', function(){ setTimeout(attach, 50); });
+  }
+})();
+"""
+
+
 def _dropdown_menu(buttons, x, y):
     return dict(
         type='dropdown',
@@ -641,7 +723,7 @@ def create_map(
             "resetScale2d",
         ],
         "modeBarButtonsToAdd": [
-            "zoomIn2d", "zoomOut2d", "resetScale2d"
+            "zoomIn2d", "zoomOut2d"
         ]
     }
 
@@ -650,9 +732,7 @@ def create_map(
         post_scripts = []
         if menus:
             post_scripts.append(_RESIZE_POST_SCRIPT)
-        non_orthographic = any(v != 'orthographic' for _, v in proj_items)
-        if non_orthographic:
-            post_scripts.append(_PAN_LOCK_SCRIPT)
+        post_scripts.append(_RESET_HOOK_SCRIPT)
         if post_scripts:
             write_kwargs['post_script'] = post_scripts
         fig.write_html(save_path, **write_kwargs)
