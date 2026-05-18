@@ -238,59 +238,281 @@ def _parse_coords(c):
 
     return pd.Series([np.nan, np.nan])
 
-_HATCH_PLACEHOLDER = "#ff00ff"
+_PLANNED_COLOR = "#9467bd"
 
-_HATCH_POST_SCRIPT = r"""
+
+def _build_country_traces(df_, var, code_convention, bins, color, tooltip_mode, df_planned):
+    NUM_COLS = df_.select_dtypes(include='number').columns.tolist()
+    df_ = df_.groupby('country')[NUM_COLS].sum().reset_index()
+    df = add_country_codes(df_.copy())
+    df = df.dropna(subset=[code_convention, var])
+
+    if bins is None:
+        bins = np.linspace(df[var].min(), df[var].max(), 5)
+
+    n_bins = len(bins) - 1
+    df = df[df[var].notna()].copy()
+    df["bin"] = pd.cut(df[var], bins=bins, include_lowest=True, labels=False)
+    df["bin"] = df["bin"].astype("Int64")
+
+    if color is None:
+        colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"][:n_bins]
+    elif isinstance(color, list):
+        colors = color[:n_bins]
+    else:
+        base_rgb = np.array(mcolors.to_rgb(color))
+        bin_mids = np.array([bins[i] + (bins[i+1] - bins[i]) / 2 for i in range(n_bins)])
+        log_norm = ((np.log(bin_mids) - np.log(bin_mids.min())) / (np.log(bin_mids.max()) - np.log(bin_mids.min())))
+        colors = [mcolors.to_hex(base_rgb * (0.3 + 0.7*(1 - log_val))) for log_val in log_norm]
+
+    colorscale = []
+    for i, c in enumerate(colors):
+        colorscale.append([i / n_bins, c])
+        colorscale.append([(i + 1) / n_bins, c])
+
+    # ---- Aggregate planned data per country (if any) for tooltip lookup ----
+    planned_map = {}
+    dfp_full = None
+    if df_planned is not None and not df_planned.empty:
+        P_NUM = df_planned.select_dtypes(include='number').columns.tolist()
+        dfp_full = df_planned.groupby('country')[P_NUM].sum().reset_index()
+        dfp_full = add_country_codes(dfp_full)
+        dfp_full = dfp_full.dropna(subset=[code_convention, var])
+        planned_map = dict(zip(dfp_full[code_convention], dfp_full[var]))
+
+    def _fmt(v):
+        return v if tooltip_mode == 'raw' else format_days_to_ymwd(v)
+
+    def _tooltip(row):
+        country_name = row.get('country', row[code_convention])
+        code = row[code_convention]
+        been_val = row[var]
+        planned_val = planned_map.get(code, 0) or 0
+        if planned_val > 0:
+            total = been_val + planned_val
+            return (f"{country_name} (been): {_fmt(been_val)}<br>"
+                    f"{country_name} (planned): {_fmt(planned_val)}<br>"
+                    f"{country_name} (total): {_fmt(total)}")
+        return f"{country_name}: {_fmt(been_val)}"
+
+    hover_text = df.apply(_tooltip, axis=1)
+
+    traces = [
+        go.Choropleth(
+            locations=df[code_convention],
+            z=df["bin"],
+            locationmode="ISO-3",
+            text=hover_text,
+            hoverinfo="text",
+            colorscale=colorscale,
+            zmin=0,
+            zmax=n_bins,
+            marker_line_width=0,
+            showscale=False,
+        )
+    ]
+
+    if dfp_full is not None:
+        been_codes = set(df[code_convention].dropna())
+        dfp = dfp_full[~dfp_full[code_convention].isin(been_codes)]
+        if not dfp.empty:
+            hover_planned = dfp.apply(
+                lambda r: f"{r['country']} (planned): {_fmt(r[var])}",
+                axis=1
+            )
+            traces.append(
+                go.Choropleth(
+                    locations=dfp[code_convention],
+                    z=[1] * len(dfp),
+                    locationmode="ISO-3",
+                    text=hover_planned,
+                    hoverinfo="text",
+                    colorscale=[[0, _PLANNED_COLOR], [1, _PLANNED_COLOR]],
+                    zmin=0,
+                    zmax=1,
+                    marker_line_width=0,
+                    showscale=False,
+                )
+            )
+    return traces
+
+
+def _build_city_traces(df_, var, color, tooltip_mode, df_planned):
+    df = df_.copy()
+    df = df.dropna(subset=["city", "coordinates", var])
+    df[["lat", "lon"]] = df["coordinates"].apply(_parse_coords)
+    df = df.dropna(subset=["lat", "lon"])
+    df_b = df[['city', 'coordinates', 'lat', 'lon', var]].rename(columns={var: 'been'})
+
+    if df_planned is not None and not df_planned.empty:
+        dfp = df_planned.copy().dropna(subset=["city", "coordinates", var])
+        dfp[["lat", "lon"]] = dfp["coordinates"].apply(_parse_coords)
+        dfp = dfp.dropna(subset=["lat", "lon"])
+        df_p = dfp[['city', 'coordinates', 'lat', 'lon', var]].rename(columns={var: 'planned'})
+        merged = pd.merge(df_b, df_p, on=['city', 'coordinates', 'lat', 'lon'], how='outer')
+    else:
+        merged = df_b.copy()
+        merged['planned'] = 0.0
+
+    merged['been'] = merged['been'].fillna(0.0)
+    merged['planned'] = merged['planned'].fillna(0.0)
+    merged['total'] = merged['been'] + merged['planned']
+
+    size_raw = np.log1p(merged['total'])
+    sr_min, sr_max = float(size_raw.min()), float(size_raw.max())
+    def _size(v):
+        if v is None or pd.isna(v) or v <= 0:
+            return 0.0
+        r = np.log1p(v)
+        if sr_max > sr_min:
+            return float(4 + 30 * (r - sr_min) / (sr_max - sr_min))
+        return 10.0
+    merged['size_been'] = merged['been'].apply(_size)
+    merged['size_total'] = merged['total'].apply(_size)
+
+    solid = merged[merged['been'] > 0].copy()
+    rings_both = merged[(merged['been'] > 0) & (merged['planned'] > 0)].copy()
+    planned_only = merged[(merged['been'] == 0) & (merged['planned'] > 0)].copy()
+
+    def _tt_solid(row):
+        v = row['been']
+        return f"{row['city']}: {v}" if tooltip_mode == 'raw' else f"{row['city']}: {format_days_to_ymwd(v)}"
+
+    def _tt_ring(row):
+        if tooltip_mode == 'raw':
+            if row['been'] > 0:
+                return (f"{row['city']} (been): {row['been']}<br>"
+                        f"{row['city']} (planned): {row['planned']}<br>"
+                        f"{row['city']} (total): {row['total']}")
+            return f"{row['city']} (planned): {row['planned']}"
+        if row['been'] > 0:
+            return (f"{row['city']} (been): {format_days_to_ymwd(row['been'])}<br>"
+                    f"{row['city']} (planned): {format_days_to_ymwd(row['planned'])}<br>"
+                    f"{row['city']} (total): {format_days_to_ymwd(row['total'])}")
+        return f"{row['city']} (planned): {format_days_to_ymwd(row['planned'])}"
+
+    marker_color = color or "#e41a1c"
+    traces = []
+    if not planned_only.empty:
+        traces.append(
+            go.Scattergeo(
+                lon=planned_only['lon'], lat=planned_only['lat'],
+                text=planned_only.apply(_tt_ring, axis=1),
+                hoverinfo="text",
+                mode="markers",
+                marker=dict(
+                    size=planned_only['size_total'],
+                    color=_PLANNED_COLOR,
+                    line=dict(width=0),
+                    opacity=0.75,
+                ),
+                name='planned',
+            )
+        )
+    if not rings_both.empty:
+        ring_width = (rings_both['size_total'] - rings_both['size_been']) / 2.0
+        traces.append(
+            go.Scattergeo(
+                lon=rings_both['lon'], lat=rings_both['lat'],
+                text=rings_both.apply(_tt_ring, axis=1),
+                hoverinfo="text",
+                mode="markers",
+                marker=dict(
+                    size=rings_both['size_total'],
+                    color='rgba(0,0,0,0)',
+                    line=dict(color=_PLANNED_COLOR, width=ring_width),
+                    opacity=1.0,
+                ),
+                name='both',
+            )
+        )
+    if not solid.empty:
+        traces.append(
+            go.Scattergeo(
+                lon=solid['lon'], lat=solid['lat'],
+                text=solid.apply(_tt_solid, axis=1),
+                hoverinfo="text",
+                mode="markers",
+                marker=dict(
+                    size=solid['size_been'],
+                    color=marker_color,
+                    opacity=0.75,
+                    line=dict(width=0),
+                ),
+                name='been',
+            )
+        )
+    return traces
+
+
+_PAN_LOCK_SCRIPT = r"""
 (function(){
   var gd = document.getElementById('{plot_id}');
   if (!gd) return;
-  var NS = 'http://www.w3.org/2000/svg';
-  var hatchColor = '__HATCH_COLOR__';
-  function ensurePattern(svg) {
-    var defs = svg.querySelector('defs');
-    if (!defs) {
-      defs = document.createElementNS(NS, 'defs');
-      svg.insertBefore(defs, svg.firstChild);
-    }
-    if (!defs.querySelector('#hatch-planned')) {
-      var p = document.createElementNS(NS, 'pattern');
-      p.setAttribute('id', 'hatch-planned');
-      p.setAttribute('patternUnits', 'userSpaceOnUse');
-      p.setAttribute('width', '8');
-      p.setAttribute('height', '8');
-      p.setAttribute('patternTransform', 'rotate(45)');
-      var bg = document.createElementNS(NS, 'rect');
-      bg.setAttribute('width', '8'); bg.setAttribute('height', '8');
-      bg.setAttribute('fill', 'white');
-      var ln = document.createElementNS(NS, 'line');
-      ln.setAttribute('x1', '0'); ln.setAttribute('y1', '0');
-      ln.setAttribute('x2', '0'); ln.setAttribute('y2', '8');
-      ln.setAttribute('stroke', hatchColor);
-      ln.setAttribute('stroke-width', '3');
-      p.appendChild(bg); p.appendChild(ln);
-      defs.appendChild(p);
-    }
+  var resetting = false;
+  function isFlat() {
+    try {
+      var t = gd.layout && gd.layout.geo && gd.layout.geo.projection && gd.layout.geo.projection.type;
+      return t && t !== 'orthographic';
+    } catch(e) { return false; }
   }
-  var MAGENTA = /(?:rgb\(\s*255\s*,\s*0\s*,\s*255\s*\)|#ff00ff)/i;
-  function applyHatch() {
-    var svgs = gd.querySelectorAll('svg');
-    svgs.forEach(function(svg){ ensurePattern(svg); });
-    var paths = gd.querySelectorAll('path.choroplethlocation, g.choropleth path, path');
-    paths.forEach(function(p){
-      var style = p.getAttribute('style') || '';
-      var fillAttr = p.getAttribute('fill') || '';
-      var computed = '';
-      try { computed = window.getComputedStyle(p).fill || ''; } catch(e){}
-      if (MAGENTA.test(style) || MAGENTA.test(fillAttr) || MAGENTA.test(computed)) {
-        p.style.fill = 'url(#hatch-planned)';
+  function onRelayout(ed) {
+    if (resetting || !isFlat() || !ed) return;
+    var fixes = {};
+    var needsFix = false;
+    Object.keys(ed).forEach(function(k){
+      if ((k === 'geo.center.lat' || k === 'geo.center.lon') && ed[k] !== 0) {
+        fixes[k] = 0;
+        needsFix = true;
+      } else if ((k === 'geo.projection.rotation.lat' || k === 'geo.projection.rotation.lon') && ed[k] !== 0) {
+        fixes[k] = 0;
+        needsFix = true;
       }
     });
+    if (needsFix && window.Plotly) {
+      resetting = true;
+      window.Plotly.relayout(gd, fixes).then(function(){ resetting = false; }).catch(function(){ resetting = false; });
+    }
   }
-  if (gd.on) { gd.on('plotly_afterplot', applyHatch); }
-  setTimeout(applyHatch, 100);
-  setTimeout(applyHatch, 600);
+  if (gd.on) { gd.on('plotly_relayout', onRelayout); }
 })();
 """
+
+
+_RESIZE_POST_SCRIPT = r"""
+(function(){
+  var gd = document.getElementById('{plot_id}');
+  if (!gd) return;
+  function forceResize() {
+    if (window.Plotly && window.Plotly.Plots && window.Plotly.Plots.resize) {
+      try { window.Plotly.Plots.resize(gd); } catch(e) {}
+    }
+  }
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(forceResize).catch(function(){});
+  }
+  setTimeout(forceResize, 300);
+  setTimeout(forceResize, 1200);
+})();
+"""
+
+
+def _dropdown_menu(buttons, x, y):
+    return dict(
+        type='dropdown',
+        direction='down',
+        buttons=buttons,
+        x=x,
+        y=y,
+        xanchor='left',
+        yanchor='top',
+        pad=dict(l=8, r=8, t=6, b=6),
+        showactive=True,
+        active=0,
+        bgcolor='rgba(0,0,0,0)',
+        borderwidth=0,
+        font=dict(family='Arial, sans-serif', color='royalblue', size=14),
+    )
 
 
 def create_map(
@@ -306,205 +528,50 @@ def create_map(
     save_path=None
 ):
 
-    hatch_needed = False
-
-    # =========================
-    # COUNTRY LEVEL (DEFAULT)
-    # =========================
-    if level == "country":
-
-        # ---- Ensure ISO codes ----
-        NUM_COLS = df_.select_dtypes(include='number').columns.tolist()
-        df_ = df_.groupby('country')[NUM_COLS].sum().reset_index()
-        df = add_country_codes(df_.copy())
-        df = df.dropna(subset=[code_convention, var])
-
-        # ---- Binning ----
-        if bins is None:
-            bins = np.linspace(df[var].min(), df[var].max(), 5)
-
-        n_bins = len(bins) - 1
-        df = df[df[var].notna()].copy()
-        df["bin"] = pd.cut(df[var], bins=bins, include_lowest=True, labels=False)
-        df["bin"] = df["bin"].astype("Int64")  # nullable integer
-
-        # ---- Colors ----
-        if color is None:
-            colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"][:n_bins]
-        elif isinstance(color, list):
-            colors = color[:n_bins]
-        else:
-            base_rgb = np.array(mcolors.to_rgb(color))
-            bin_mids = np.array([bins[i] + (bins[i+1] - bins[i]) / 2 for i in range(n_bins)])
-            log_norm = ((np.log(bin_mids) - np.log(bin_mids.min())) / (np.log(bin_mids.max()) - np.log(bin_mids.min())))
-            colors = [mcolors.to_hex(base_rgb * (0.3 + 0.7*(1 - log_val))) for log_val in log_norm]
-
-        # ---- Discrete colorscale ----
-        colorscale = []
-        for i, c in enumerate(colors):
-            colorscale.append([i / n_bins, c])
-            colorscale.append([(i + 1) / n_bins, c])
-
-        # ---- Tooltip ----
-        def _tooltip(row):
-            country_name = row.get('country', row[code_convention])
-            value = row[var]
-            if tooltip_mode == 'raw':
-                return f"{country_name}: {value}"
-            else:
-                return f"{country_name}: {format_days_to_ymwd(value)}"
-
-        hover_text = df.apply(_tooltip, axis=1)
-
-        # ---- Choropleth ----
-        fig = go.Figure(
-            go.Choropleth(
-                locations=df[code_convention],
-                z=df["bin"],
-                locationmode="ISO-3",
-                text=hover_text,
-                hoverinfo="text",
-                colorscale=colorscale,
-                zmin=0,
-                zmax=n_bins,
-                marker_line_width=0,
-                showscale=False
-            )
-        )
-
-        # ---- Planned-only countries: hatched fill ----
-        if df_planned is not None and not df_planned.empty:
-            P_NUM = df_planned.select_dtypes(include='number').columns.tolist()
-            dfp = df_planned.groupby('country')[P_NUM].sum().reset_index()
-            dfp = add_country_codes(dfp)
-            dfp = dfp.dropna(subset=[code_convention, var])
-            been_codes = set(df[code_convention].dropna())
-            dfp = dfp[~dfp[code_convention].isin(been_codes)]
-            if not dfp.empty:
-                hatch_needed = True
-                hover_planned = dfp.apply(
-                    lambda r: (f"{r['country']} (planned): {r[var]}"
-                               if tooltip_mode == 'raw'
-                               else f"{r['country']} (planned): {format_days_to_ymwd(r[var])}"),
-                    axis=1
-                )
-                fig.add_trace(
-                    go.Choropleth(
-                        locations=dfp[code_convention],
-                        z=[1] * len(dfp),
-                        locationmode="ISO-3",
-                        text=hover_planned,
-                        hoverinfo="text",
-                        colorscale=[[0, _HATCH_PLACEHOLDER], [1, _HATCH_PLACEHOLDER]],
-                        zmin=0,
-                        zmax=1,
-                        marker_line_width=0,
-                        showscale=False,
-                    )
-                )
-
-    # =========================
-    # CITY LEVEL (BUBBLE MAP)
-    # =========================
-    elif level == "city":
-
-        df = df_.copy()
-        df = df.dropna(subset=["city", "coordinates", var])
-        df[["lat", "lon"]] = df["coordinates"].apply(_parse_coords)
-        df = df.dropna(subset=["lat", "lon"])
-        df_b = df[['city', 'coordinates', 'lat', 'lon', var]].rename(columns={var: 'been'})
-
-        if df_planned is not None and not df_planned.empty:
-            dfp = df_planned.copy().dropna(subset=["city", "coordinates", var])
-            dfp[["lat", "lon"]] = dfp["coordinates"].apply(_parse_coords)
-            dfp = dfp.dropna(subset=["lat", "lon"])
-            df_p = dfp[['city', 'coordinates', 'lat', 'lon', var]].rename(columns={var: 'planned'})
-            merged = pd.merge(df_b, df_p, on=['city', 'coordinates', 'lat', 'lon'], how='outer')
-        else:
-            merged = df_b.copy()
-            merged['planned'] = 0.0
-
-        merged['been'] = merged['been'].fillna(0.0)
-        merged['planned'] = merged['planned'].fillna(0.0)
-        merged['total'] = merged['been'] + merged['planned']
-
-        # ---- Shared log-scaled size across union ----
-        size_raw = np.log1p(merged['total'])
-        sr_min, sr_max = float(size_raw.min()), float(size_raw.max())
-        def _size(v):
-            if v is None or pd.isna(v) or v <= 0:
-                return 0.0
-            r = np.log1p(v)
-            if sr_max > sr_min:
-                return float(4 + 30 * (r - sr_min) / (sr_max - sr_min))
-            return 10.0
-        merged['size_been'] = merged['been'].apply(_size)
-        merged['size_total'] = merged['total'].apply(_size)
-
-        solid = merged[merged['been'] > 0].copy()
-        rings = merged[merged['planned'] > 0].copy()
-
-        def _tt_solid(row):
-            v = row['been']
-            return f"{row['city']}: {v}" if tooltip_mode == 'raw' else f"{row['city']}: {format_days_to_ymwd(v)}"
-
-        def _tt_ring(row):
-            if tooltip_mode == 'raw':
-                if row['been'] > 0:
-                    return f"{row['city']}: {row['been']} been + {row['planned']} planned = {row['total']} total"
-                return f"{row['city']} (planned): {row['planned']}"
-            if row['been'] > 0:
-                return (f"{row['city']}: {format_days_to_ymwd(row['been'])} been + "
-                        f"{format_days_to_ymwd(row['planned'])} planned = {format_days_to_ymwd(row['total'])} total")
-            return f"{row['city']} (planned): {format_days_to_ymwd(row['planned'])}"
-
-        marker_color = color or "#e41a1c"
-        fig = go.Figure()
-        if not rings.empty:
-            fig.add_trace(
-                go.Scattergeo(
-                    lon=rings['lon'], lat=rings['lat'],
-                    text=rings.apply(_tt_ring, axis=1),
-                    hoverinfo="text",
-                    mode="markers",
-                    marker=dict(
-                        size=rings['size_total'],
-                        color='rgba(0,0,0,0)',
-                        line=dict(color=marker_color, width=2),
-                        opacity=1.0,
-                    ),
-                    name='planned',
-                )
-            )
-        if not solid.empty:
-            fig.add_trace(
-                go.Scattergeo(
-                    lon=solid['lon'], lat=solid['lat'],
-                    text=solid.apply(_tt_solid, axis=1),
-                    hoverinfo="text",
-                    mode="markers",
-                    marker=dict(
-                        size=solid['size_been'],
-                        color=marker_color,
-                        opacity=0.75,
-                        line=dict(width=0),
-                    ),
-                    name='been',
-                )
-            )
-
+    # ---- Normalize projection_type and level ----
+    if isinstance(projection_type, dict):
+        proj_items = list(projection_type.items())
     else:
-        raise ValueError("level must be 'country' or 'city'")
+        proj_items = [(str(projection_type), projection_type)]
+    initial_projection = proj_items[0][1]
 
-    # =========================
-    # COMMON STYLING
-    # =========================
-    fig.update_traces(
-        hoverlabel=dict(bgcolor="black")
-    )
+    if isinstance(level, dict):
+        level_items = list(level.items())
+    else:
+        level_items = [(str(level), level)]
+
+    # ---- Build traces for each level; track index ranges ----
+    fig = go.Figure()
+    level_ranges = []  # list of (label, start_idx, end_idx)
+
+    for lvl_label, lvl_value in level_items:
+        start_idx = len(fig.data)
+        if lvl_value == "country":
+            traces = _build_country_traces(
+                df_, var, code_convention, bins, color, tooltip_mode, df_planned
+            )
+        elif lvl_value == "city":
+            traces = _build_city_traces(
+                df_, var, color, tooltip_mode, df_planned
+            )
+        else:
+            raise ValueError("level values must be 'country' or 'city'")
+        for t in traces:
+            fig.add_trace(t)
+        level_ranges.append((lvl_label, start_idx, len(fig.data)))
+
+    # ---- Initial visibility: only first level visible ----
+    initial_label = level_items[0][0]
+    n_total = len(fig.data)
+    for label, start, end in level_ranges:
+        is_initial = (label == initial_label)
+        for i in range(start, end):
+            fig.data[i].visible = is_initial
+
+    fig.update_traces(hoverlabel=dict(bgcolor="black"))
 
     fig.update_geos(
-        projection_type=projection_type,
+        projection_type=initial_projection,
         showland=True,
         landcolor="white",
         showocean=True,
@@ -515,7 +582,40 @@ def create_map(
         bgcolor="black",
     )
 
-    fig.update_layout(
+    # ---- Build dropdown menus (only if multiple options) ----
+    menus = []
+    next_y = 0.99
+    if len(level_items) > 1:
+        level_buttons = []
+        for label, start, end in level_ranges:
+            visible = [(start <= i < end) for i in range(n_total)]
+            level_buttons.append(
+                dict(label=label, method='update', args=[{'visible': visible}])
+            )
+        menus.append(_dropdown_menu(level_buttons, x=0.01, y=next_y))
+        next_y -= 0.10
+    if len(proj_items) > 1:
+        proj_buttons = [
+            dict(
+                label=label,
+                method='relayout',
+                args=[{
+                    'geo.projection.type': value,
+                    'geo.projection.rotation.lon': 0,
+                    'geo.projection.rotation.lat': 0,
+                    'geo.projection.rotation.roll': 0,
+                    'geo.projection.scale': 1,
+                    'geo.center.lon': 0,
+                    'geo.center.lat': 0,
+                    'geo.lonaxis.range': None,
+                    'geo.lataxis.range': None,
+                }],
+            )
+            for label, value in proj_items
+        ]
+        menus.append(_dropdown_menu(proj_buttons, x=0.01, y=next_y))
+
+    layout_kwargs = dict(
         paper_bgcolor="black",
         plot_bgcolor="black",
         margin=dict(l=0, r=0, t=0, b=0),
@@ -523,10 +623,14 @@ def create_map(
         hovermode="closest",
         showlegend=False,
     )
+    if menus:
+        layout_kwargs['updatemenus'] = menus
+    fig.update_layout(**layout_kwargs)
 
     config = {
         "displayModeBar": True,
         "displaylogo": False,
+        "scrollZoom": True,
         "modeBarButtonsToRemove": [
             "toImage", "zoom2d", "pan2d",
             "lasso2d", "select2d",
@@ -543,9 +647,14 @@ def create_map(
 
     if save_path:
         write_kwargs = dict(include_plotlyjs="cdn", config=config)
-        if hatch_needed:
-            hatch_color = color if isinstance(color, str) else "royalblue"
-            write_kwargs['post_script'] = _HATCH_POST_SCRIPT.replace('__HATCH_COLOR__', hatch_color)
+        post_scripts = []
+        if menus:
+            post_scripts.append(_RESIZE_POST_SCRIPT)
+        non_orthographic = any(v != 'orthographic' for _, v in proj_items)
+        if non_orthographic:
+            post_scripts.append(_PAN_LOCK_SCRIPT)
+        if post_scripts:
+            write_kwargs['post_script'] = post_scripts
         fig.write_html(save_path, **write_kwargs)
 
     return fig.show(config=config)
@@ -652,11 +761,9 @@ def create_tree(
             axis=1
         )
 
-        # ------------------ Add <br> padding to parent labels to move text toward top ------------------
-        def pad_parent_label(row, n_lines=2):
-            return '<br>'*n_lines + row['label']
+        # Push parent labels toward top so they don't overlap children when centered
+        parent_df['label'] = parent_df['label'].apply(lambda s: '<br><br>' + s)
 
-        parent_df['label'] = parent_df.apply(lambda r: pad_parent_label(r), axis=1)
         df_copy = pd.concat([parent_df, df_copy], ignore_index=True)
     else:
         df_copy['id'] = df_copy[flag] + ' | ' + df_copy[feat_wrapped]
@@ -677,8 +784,8 @@ def create_tree(
             line=dict(color='black', width=1)
         ),
         textinfo="label+value+percent root",
-        texttemplate="%{label}<br>(%{value:.0f}, %{percentRoot:.0%})",
-        textposition="middle center",
+        texttemplate="<br>%{label}<br>(%{value:.0f}, %{percentRoot:.0%})",
+        textposition="top left",
         textfont=dict(size=TREE_TEXT_SIZE),
         hoverinfo='none',
         branchvalues='total'
