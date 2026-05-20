@@ -748,7 +748,7 @@ def create_tree(
         threshold_global=False,
         group_flag=False,
         title=None,
-        color_dict={'Movie': 'royalblue', 'TV': 'gold', 'Rest': 'white'},
+        color_dict={'Movie': 'royalblue', 'TV': 'gold', 'Others': 'white'},
         font_size_dict=None,
         save_path=None
         ):
@@ -771,7 +771,7 @@ def create_tree(
         large_entries = df_copy[df_copy[var] >= threshold]
         small_entries_sum = df_copy[df_copy[var] < threshold][var].sum()
         if small_entries_sum > 0:
-            other_row = {feat: 'Rest', flag: 'Rest', var: small_entries_sum}
+            other_row = {feat: 'Others', flag: 'Others', var: small_entries_sum}
             df_copy = pd.concat([large_entries, pd.DataFrame([other_row])], ignore_index=True)
     else:
         aggregated_rows = []
@@ -780,12 +780,12 @@ def create_tree(
             small_entries_sum = group[group[var] < threshold][var].sum()
             aggregated_rows.append(large_entries)
             if small_entries_sum > 0:
-                other_row = {feat: 'Rest', flag: f, var: small_entries_sum}
+                other_row = {feat: 'Others', flag: f, var: small_entries_sum}
                 aggregated_rows.append(pd.DataFrame([other_row]))
         df_copy = pd.concat(aggregated_rows, ignore_index=True)
 
-    if 'Rest' not in color_dict:
-        color_dict['Rest'] = 'gray'
+    if 'Others' not in color_dict:
+        color_dict['Others'] = 'gray'
 
     # ------------------ Dynamic text wrapping ------------------
     min_line_length = 10
