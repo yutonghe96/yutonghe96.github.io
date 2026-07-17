@@ -766,13 +766,30 @@ def create_tree(
     df_orig = df.copy()
     df_copy = df.copy()
 
+    # ------------------ Flat treemap: one tile per category ------------------
+    # When the tile key and the color key are the same column (feat == flag)
+    # the treemap is single-level. Collapse any duplicate rows (e.g. the same
+    # genre split across Movie/TV) so each category becomes exactly one tile,
+    # otherwise duplicate ids drop out and leave empty space.
+    flat = feat == flag
+    if flat:
+        df_copy = df_copy.groupby(feat, as_index=False)[var].sum()
+        df_orig = df_copy.copy()
+
     # ------------------ Threshold aggregation ------------------
     if threshold_global:
         large_entries = df_copy[df_copy[var] >= threshold]
-        small_entries_sum = df_copy[df_copy[var] < threshold][var].sum()
-        if small_entries_sum > 0:
-            other_row = {feat: 'Others', flag: 'Others', var: small_entries_sum}
-            df_copy = pd.concat([large_entries, pd.DataFrame([other_row])], ignore_index=True)
+        small_entries = df_copy[df_copy[var] < threshold]
+        if small_entries[var].sum() > 0:
+            if flat:
+                # Single-level: collapse all small tiles into one 'Others' tile.
+                other_rows = pd.DataFrame([{feat: 'Others', var: small_entries[var].sum()}])
+            else:
+                # Nested: keep the feat breakdown (e.g. Movie/TV) so the 'Others'
+                # block still splits into sub-blocks like the real blocks.
+                other_rows = small_entries.groupby(feat, as_index=False)[var].sum()
+                other_rows[flag] = 'Others'
+            df_copy = pd.concat([large_entries, other_rows], ignore_index=True)
     else:
         aggregated_rows = []
         for f, group in df_copy.groupby(flag):
