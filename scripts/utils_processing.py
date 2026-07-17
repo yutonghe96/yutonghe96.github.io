@@ -115,6 +115,71 @@ def transform_verbose_to_calendar(df, save=False):
 
     return final_df.round(2)
 
+def count_trips_per_year(df_verbose, df_calendar):
+    """Count the number of trips taken each year, split into domestic/international.
+
+    The primary residence of a year has two levels, both taken from
+    ``df_calendar``'s per-year day columns: the residence *country* (country
+    with the most days that year) and the residence *city* (city with the most
+    days that year). A trip is a contiguous period spent away from the
+    residence city, i.e. leaving the residence city and later returning to it
+    counts as one trip. Each trip is classified as *international* if it leaves
+    the residence country at any point, otherwise *domestic*, and is attributed
+    to the year in which it departs.
+
+    Returns a dict ``{'domestic': {year: count}, 'international': {year: count}}``.
+    """
+    # Primary residence (most days) for each year, at country and city level
+    year_cols = [c for c in df_calendar.columns if str(c).isdigit()]
+    country_days = df_calendar.groupby('country')[year_cols].sum()
+    residence_country = {int(c): country_days[c].idxmax() for c in year_cols}
+    residence_city = {
+        int(c): (df_calendar.loc[df_calendar[c].idxmax(), 'country'],
+                 df_calendar.loc[df_calendar[c].idxmax(), 'city'])
+        for c in year_cols
+    }
+
+    # Chronological city stays (merge consecutive same-city segments)
+    dfv = df_verbose.copy()
+    dfv['start_date'] = pd.to_datetime(dfv['start_date'])
+    dfv['end_date'] = pd.to_datetime(dfv['end_date'])
+    dfv = dfv.sort_values('start_date')
+
+    stays = []
+    for _, r in dfv.iterrows():
+        if stays and stays[-1]['country'] == r['country'] and stays[-1]['city'] == r['city']:
+            stays[-1]['end'] = max(stays[-1]['end'], r['end_date'])
+        else:
+            stays.append({'country': r['country'], 'city': r['city'],
+                          'start': r['start_date'], 'end': r['end_date']})
+
+    # Each away-from-residence-city excursion is one trip, at its departure year;
+    # international if it ever leaves the residence country, else domestic
+    trips_dom = {int(c): 0 for c in year_cols}
+    trips_intl = {int(c): 0 for c in year_cols}
+    in_trip = False
+    depart_year = None
+    went_abroad = False
+    for s in stays:
+        y = s['start'].year
+        is_home = (s['country'], s['city']) == residence_city.get(y)
+        if not is_home:
+            if not in_trip:
+                in_trip = True
+                depart_year = y
+                went_abroad = False
+            if s['country'] != residence_country.get(y):
+                went_abroad = True
+        elif in_trip:
+            bucket = trips_intl if went_abroad else trips_dom
+            bucket[depart_year] = bucket.get(depart_year, 0) + 1
+            in_trip = False
+    if in_trip:
+        bucket = trips_intl if went_abroad else trips_dom
+        bucket[depart_year] = bucket.get(depart_year, 0) + 1
+
+    return {'domestic': trips_dom, 'international': trips_intl}
+
 def transform_counts_to_calendar(df):
     # Step 1: Normalize country strings
     def normalize_countries(country_str):

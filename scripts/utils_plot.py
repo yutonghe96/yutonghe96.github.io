@@ -8,11 +8,12 @@ import re
 from utils_processing import add_country_codes, format_days_to_ymwd
 
 def plot_bar_time_series(
-        df, 
-        select_type='travel', 
-        time_period='year', 
-        title='Countries Been', 
+        df,
+        select_type='travel',
+        time_period='year',
+        title='Countries Been',
         font_size_dict=None,
+        trip_counts=None,
         save_path=None
         ):
     
@@ -46,21 +47,22 @@ def plot_bar_time_series(
         df_visits = df_visits.merge(first_visit, on='country')
         df_visits['visit_type'] = df_visits.apply(lambda row: 'new' if row[time_period] == row['first_year'] else 'repeat', axis=1)
 
-        # Numbered country list
-        def make_numbered_list(country_series):
-            countries = sorted(country_series.unique())
-            return '<br>'.join(f"{i + 1}. {c}" for i, c in enumerate(countries))
+        # Numbered country list, with number of days in that country that year
+        def make_numbered_list(group):
+            group = group.sort_values('country')
+            return '<br>'.join(
+                f"{i + 1}. {row['country']} ({row['count']:.1f})"
+                for i, (_, row) in enumerate(group.iterrows())
+            )
 
         # Aggregate data
-        new_visits = df_visits[df_visits['visit_type'] == 'new'].groupby(time_period).agg(
-            new_count=('country', 'nunique'),
-            new_countries=('country', make_numbered_list)
-        ).reset_index()
+        new_group = df_visits[df_visits['visit_type'] == 'new'].groupby(time_period)
+        new_visits = new_group.agg(new_count=('country', 'nunique')).reset_index()
+        new_visits['new_countries'] = new_group.apply(make_numbered_list).values
 
-        repeat_visits = df_visits[df_visits['visit_type'] == 'repeat'].groupby(time_period).agg(
-            repeat_count=('country', 'nunique'),
-            repeat_countries=('country', make_numbered_list)
-        ).reset_index()
+        repeat_group = df_visits[df_visits['visit_type'] == 'repeat'].groupby(time_period)
+        repeat_visits = repeat_group.agg(repeat_count=('country', 'nunique')).reset_index()
+        repeat_visits['repeat_countries'] = repeat_group.apply(make_numbered_list).values
 
         summary = pd.merge(new_visits, repeat_visits, on=time_period, how='outer').fillna({'new_count': 0, 'repeat_count': 0})
         summary = summary.sort_values(time_period)
@@ -87,6 +89,27 @@ def plot_bar_time_series(
             customdata=summary['repeat_countries'].values,
             hovertemplate='%{customdata}<extra></extra>'
         ))
+
+        # Trip counts (excursions away from that year's primary residence city)
+        if trip_counts is not None:
+            domestic = trip_counts.get('domestic', {})
+            international = trip_counts.get('international', {})
+            fig.add_trace(go.Bar(
+                x=summary[time_period].astype(str),
+                y=[domestic.get(int(y), 0) for y in summary[time_period]],
+                name='Trip count (dom.)',
+                marker_color='mediumpurple',
+                offsetgroup=2,
+                hovertemplate='Year: %{x}<br>Domestic trips: %{y}<extra></extra>'
+            ))
+            fig.add_trace(go.Bar(
+                x=summary[time_period].astype(str),
+                y=[international.get(int(y), 0) for y in summary[time_period]],
+                name='Trip count (intl.)',
+                marker_color='blueviolet',
+                offsetgroup=3,
+                hovertemplate='Year: %{x}<br>International trips: %{y}<extra></extra>'
+            ))
 
         # Cumulative line
         fig.add_trace(go.Scatter(
