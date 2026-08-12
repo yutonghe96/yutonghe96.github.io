@@ -124,8 +124,11 @@ def count_trips_per_year(df_verbose, df_calendar):
     days that year). A trip is a contiguous period spent away from the
     residence city, i.e. leaving the residence city and later returning to it
     counts as one trip. Each trip is classified as *international* if it leaves
-    the residence country at any point, otherwise *domestic*, and is attributed
-    to the year in which it departs.
+    the residence country at any point, otherwise *domestic*. A trip counts as 1
+    in total, split across the years it spans in proportion to the number of
+    days spent in each (e.g. a 30-day trip with 20 days in one year and 10 in
+    the next counts 0.7 toward the first year and 0.3 toward the second). Yearly
+    totals are rounded to one decimal.
 
     Returns a dict ``{'domestic': {year: count}, 'international': {year: count}}``.
     """
@@ -153,12 +156,27 @@ def count_trips_per_year(df_verbose, df_calendar):
             stays.append({'country': r['country'], 'city': r['city'],
                           'start': r['start_date'], 'end': r['end_date']})
 
-    # Each away-from-residence-city excursion is one trip, at its departure year;
-    # international if it ever leaves the residence country, else domestic
+    # One trip's share of each year it spans, proportional to days in that year
+    def year_shares(start, end):
+        total = (end - start).days
+        if total <= 0:
+            return {start.year: 1.0}
+        shares = {}
+        for y in range(start.year, end.year + 1):
+            y_start = max(start, pd.Timestamp(year=y, month=1, day=1))
+            y_end = min(end, pd.Timestamp(year=y + 1, month=1, day=1))
+            days = (y_end - y_start).days
+            if days > 0:
+                shares[y] = days / total
+        return shares
+
+    # Each away-from-residence-city excursion is one trip, spread over the years
+    # it spans; international if it ever leaves the residence country, else domestic
     trips_dom = {int(c): 0 for c in year_cols}
     trips_intl = {int(c): 0 for c in year_cols}
     in_trip = False
-    depart_year = None
+    trip_start = None
+    trip_end = None
     went_abroad = False
     for s in stays:
         y = s['start'].year
@@ -166,17 +184,23 @@ def count_trips_per_year(df_verbose, df_calendar):
         if not is_home:
             if not in_trip:
                 in_trip = True
-                depart_year = y
+                trip_start = s['start']
                 went_abroad = False
+            trip_end = s['end']
             if s['country'] != residence_country.get(y):
                 went_abroad = True
         elif in_trip:
             bucket = trips_intl if went_abroad else trips_dom
-            bucket[depart_year] = bucket.get(depart_year, 0) + 1
+            for yy, share in year_shares(trip_start, trip_end).items():
+                bucket[yy] = bucket.get(yy, 0) + share
             in_trip = False
     if in_trip:
         bucket = trips_intl if went_abroad else trips_dom
-        bucket[depart_year] = bucket.get(depart_year, 0) + 1
+        for yy, share in year_shares(trip_start, trip_end).items():
+            bucket[yy] = bucket.get(yy, 0) + share
+
+    trips_dom = {y: round(v, 1) for y, v in sorted(trips_dom.items())}
+    trips_intl = {y: round(v, 1) for y, v in sorted(trips_intl.items())}
 
     return {'domestic': trips_dom, 'international': trips_intl}
 

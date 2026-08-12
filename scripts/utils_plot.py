@@ -786,6 +786,8 @@ def create_tree(
         TITLE_FONT_SIZE = 22
         TREE_TEXT_SIZE = 20
 
+    TREE_TEXT_TEMPLATE = "<br>%{label}<br>(%{value:.0f}, %{percentRoot:.0%})"
+
     df_orig = df.copy()
     df_copy = df.copy()
 
@@ -805,23 +807,32 @@ def create_tree(
         small_entries = df_copy[df_copy[var] < threshold]
         if small_entries[var].sum() > 0:
             if flat:
-                # Single-level: collapse all small tiles into one 'Others' tile.
-                other_rows = pd.DataFrame([{feat: 'Others', var: small_entries[var].sum()}])
+                # Single-level: collapse all small tiles into one 'Others' tile,
+                # unless a single tile would end up in it (then just show it).
+                if len(small_entries) == 1:
+                    other_rows = small_entries.copy()
+                else:
+                    other_rows = pd.DataFrame([{feat: 'Others', var: small_entries[var].sum()}])
             else:
                 # Nested: keep the feat breakdown (e.g. Movie/TV) so the 'Others'
                 # block still splits into sub-blocks like the real blocks.
                 other_rows = small_entries.groupby(feat, as_index=False)[var].sum()
-                other_rows[flag] = 'Others'
+                # An 'Others' block holding a single item is just that item.
+                other_rows[flag] = other_rows[feat] if len(other_rows) == 1 else 'Others'
             df_copy = pd.concat([large_entries, other_rows], ignore_index=True)
     else:
         aggregated_rows = []
         for f, group in df_copy.groupby(flag):
             large_entries = group[group[var] >= threshold]
-            small_entries_sum = group[group[var] < threshold][var].sum()
+            small_entries = group[group[var] < threshold]
             aggregated_rows.append(large_entries)
-            if small_entries_sum > 0:
-                other_row = {feat: 'Others', flag: f, var: small_entries_sum}
-                aggregated_rows.append(pd.DataFrame([other_row]))
+            if small_entries[var].sum() > 0:
+                if len(small_entries) == 1:
+                    # An 'Others' tile holding a single item is just that item.
+                    aggregated_rows.append(small_entries)
+                else:
+                    other_row = {feat: 'Others', flag: f, var: small_entries[var].sum()}
+                    aggregated_rows.append(pd.DataFrame([other_row]))
         df_copy = pd.concat(aggregated_rows, ignore_index=True)
 
     if 'Others' not in color_dict:
@@ -862,7 +873,6 @@ def create_tree(
     df_copy[feat_wrapped] = df_copy.apply(wrap_feat, axis=1)
 
     # ------------------ Hierarchy ------------------
-    total_sum = df_orig[var].sum()
     if group_flag:
         # ----- children -----
         df_copy['flag_id'] = df_copy[flag].astype(str)
@@ -871,24 +881,46 @@ def create_tree(
         df_copy['label'] = df_copy[feat_wrapped]
 
         # ----- parent blocks -----
-        parent_df = df_copy.groupby('flag_id', as_index=False)[var].sum()
+        # A block's numbers are built from what its sub-blocks actually display,
+        # not from rounding the block's own total: rounding the sum and summing
+        # the roundings disagree (e.g. 4.6 + 1.6 shows as 5 + 2 = 7, while the
+        # 6.2 total would show as 6).
+        root_total = df_copy[var].sum()
+
+        def round_display(x):
+            # Match plotly's ':.0f' / ':.0%' (round halves away from zero)
+            return int(np.floor(np.abs(x) + 0.5)) * (-1 if x < 0 else 1)
+
+        df_copy['_shown_var'] = df_copy[var].apply(round_display)
+        df_copy['_shown_pct'] = df_copy[var].apply(
+            lambda v: round_display(100 * v / root_total) if root_total > 0 else 0
+        )
+
+        parent_df = df_copy.groupby('flag_id', as_index=False).agg(
+            **{var: (var, 'sum'), '_shown_var': ('_shown_var', 'sum'), '_shown_pct': ('_shown_pct', 'sum')}
+        )
         parent_df[flag] = parent_df['flag_id']
-        parent_df['frac'] = parent_df[var] / total_sum if total_sum > 0 else 0
         parent_df['id'] = parent_df['flag_id']
         parent_df['parent'] = ""
         parent_df['label'] = parent_df.apply(
-            lambda r: f"{r['flag_id']} ({int(r[var])}, {r['frac']:.0%})",
+            lambda r: f"{r['flag_id']} ({r['_shown_var']}, {r['_shown_pct']}%)",
             axis=1
         )
 
         # Push parent labels toward top so they don't overlap children when centered
         parent_df['label'] = parent_df['label'].apply(lambda s: '<br><br>' + s)
 
+        # Parents print their pre-computed label (numbers already summed from the
+        # children); children get the value/percent straight from the treemap.
+        parent_df['_texttemplate'] = '<br>%{label}'
+        df_copy['_texttemplate'] = TREE_TEXT_TEMPLATE
+
         df_copy = pd.concat([parent_df, df_copy], ignore_index=True)
     else:
         df_copy['id'] = df_copy[flag] + ' | ' + df_copy[feat_wrapped]
         df_copy['parent'] = ""
         df_copy['label'] = df_copy[feat_wrapped]
+        df_copy['_texttemplate'] = TREE_TEXT_TEMPLATE
 
     # ------------------ Colors ------------------
     df_copy['_color'] = df_copy[flag].map(color_dict).fillna('gray')
@@ -904,7 +936,7 @@ def create_tree(
             line=dict(color='black', width=1)
         ),
         textinfo="label+value+percent root",
-        texttemplate="<br>%{label}<br>(%{value:.0f}, %{percentRoot:.0%})",
+        texttemplate=df_copy['_texttemplate'],
         textposition="top left",
         textfont=dict(size=TREE_TEXT_SIZE),
         hoverinfo='none',
