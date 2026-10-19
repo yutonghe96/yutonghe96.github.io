@@ -42,7 +42,12 @@ def split_been_planned(df_verbose, today=None):
 
     return df_been, df_planned
 
-def transform_verbose_to_calendar(df, save=False):
+def build_daily_calendar(df):
+    """Expand verbose trip rows into a long per-day frame with fractional day
+    credit on boundary days split between every trip overlapping that day.
+
+    Returns columns: date, country, city, coordinates, day_fraction, year.
+    """
     # Step 1: Build date → list of (row_id, start, end, country, city, coordinates)
     date_to_entries = {}
     for i, row in df.iterrows():
@@ -76,11 +81,16 @@ def transform_verbose_to_calendar(df, save=False):
             for row_id, country, city, coordinates in boundary_entries:
                 records.append((day, country, city, coordinates, weight))
 
-    # Step 3: Aggregate
-    dc_df = pd.DataFrame(records, columns=['date', 'country', 'city', 'coordinates', 'day_fraction'])
-    dc_df['date'] = pd.to_datetime(dc_df['date'])
-    dc_df['year'] = dc_df['date'].dt.year
+    daily_df = pd.DataFrame(records, columns=['date', 'country', 'city', 'coordinates', 'day_fraction'])
+    daily_df['date'] = pd.to_datetime(daily_df['date'])
+    daily_df['year'] = daily_df['date'].dt.year
+    return daily_df
 
+def transform_verbose_to_calendar(df, save=False):
+    # Step 1-2: Expand to a per-day frame with fractional boundary-day credit
+    dc_df = build_daily_calendar(df)
+
+    # Step 3: Aggregate
     grouped = (dc_df.groupby(['country', 'city', 'coordinates', 'year'])['day_fraction']
                  .sum().unstack(fill_value=0))
     grouped.columns.name = None
@@ -115,6 +125,74 @@ def transform_verbose_to_calendar(df, save=False):
 
     return final_df.round(2)
 
+def get_residence_by_year(df_calendar):
+    """The residence country for each calendar year: whichever country has the
+    most days that year, per ``df_calendar``'s year columns.
+
+    Returns ``{year: country}``.
+    """
+    year_cols = [c for c in df_calendar.columns if str(c).isdigit()]
+    country_days = df_calendar.groupby('country')[year_cols].sum()
+    return {int(c): country_days[c].idxmax() for c in year_cols}
+
+def split_lived_visited(df_verbose, df_calendar, overrides=None):
+    """Split each country's days into "lived" vs "visited", so the same
+    country can count as a residence during one period and a visit during
+    another (e.g. moving away from a country, then later returning for a
+    short trip).
+
+    By default a day counts as "lived" if its country is that calendar year's
+    residence country (see ``get_residence_by_year``), otherwise "visited".
+    This year-level default can misclassify the tail of an actual move (e.g.
+    moving abroad in August still leaves the old country with more days that
+    year). ``overrides`` lets you patch specific date ranges with an explicit
+    residence country, taking precedence over the year-level default:
+
+        overrides = [
+            ('United States', '2015-08-18', '2018-09-21'),
+            ('United Kingdom', '2018-09-21', '2020-09-15'),
+            ('Sweden', '2020-09-15', None),  # None = ongoing
+        ]
+
+    Within an override's date range, days in the override's country count as
+    "lived" and any other country's days count as "visited" (a trip taken
+    while based there).
+
+    Returns ``(df_lived, df_visited)``, each with columns
+    ``country, continent, total_days, total_years``.
+    """
+    daily = build_daily_calendar(df_verbose)
+    residence_by_year = get_residence_by_year(df_calendar)
+    daily['residence_country'] = daily['year'].map(residence_by_year)
+
+    if overrides:
+        for country, start, end in overrides:
+            start_ts = pd.Timestamp(start)
+            end_ts = pd.Timestamp(end) if end is not None else pd.Timestamp.max
+            mask = (daily['date'] >= start_ts) & (daily['date'] <= end_ts)
+            daily.loc[mask, 'residence_country'] = country
+
+    daily['status'] = np.where(daily['country'] == daily['residence_country'], 'lived', 'visited')
+
+    totals = daily.groupby(['country', 'status'])['day_fraction'].sum().unstack(fill_value=0)
+    for status in ('lived', 'visited'):
+        if status not in totals.columns:
+            totals[status] = 0.0
+    totals = totals.reset_index()
+
+    continent_by_country = df_calendar.drop_duplicates('country').set_index('country')['continent']
+    totals['continent'] = totals['country'].map(continent_by_country)
+
+    df_lived = totals.loc[totals['lived'] > 0, ['country', 'continent', 'lived']].rename(columns={'lived': 'total_days'})
+    df_lived['total_years'] = df_lived['total_days'] / 365
+    df_lived = df_lived.reset_index(drop=True)
+
+    df_visited = totals.loc[totals['visited'] > 0, ['country', 'continent', 'visited']].rename(columns={'visited': 'total_days'})
+    df_visited['total_years'] = df_visited['total_days'] / 365
+    df_visited = df_visited.reset_index(drop=True)
+
+    return df_lived, df_visited
+
 def count_trips_per_year(df_verbose, df_calendar):
     """Count the number of trips taken each year, split into domestic/international.
 
@@ -134,8 +212,7 @@ def count_trips_per_year(df_verbose, df_calendar):
     """
     # Primary residence (most days) for each year, at country and city level
     year_cols = [c for c in df_calendar.columns if str(c).isdigit()]
-    country_days = df_calendar.groupby('country')[year_cols].sum()
-    residence_country = {int(c): country_days[c].idxmax() for c in year_cols}
+    residence_country = get_residence_by_year(df_calendar)
     residence_city = {
         int(c): (df_calendar.loc[df_calendar[c].idxmax(), 'country'],
                  df_calendar.loc[df_calendar[c].idxmax(), 'city'])
