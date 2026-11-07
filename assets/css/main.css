@@ -1665,19 +1665,24 @@ input, select, textarea {
     }
 }
 
-@media screen and (max-width: 736px) {
+/* Remove outer navigation frame on narrow screens,
+   including phones in landscape */
+@media screen and (max-width: 980px) {
     #header nav ul {
         border: none;
     }
 }
 
+/* Individual tabs on phones in portrait */
 @media screen and (max-width: 480px) {
     #header nav ul li {
         border: 1px solid #ffffff;
         border-radius: 0;
+        margin: 0;
     }
 
-    #header nav ul li + li {
-        margin-top: 0;
+    /* Restore the missing top border */
+    #header nav ul li:first-child {
+        border-top: 1px solid #ffffff;
     }
 }
