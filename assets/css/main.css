@@ -1347,7 +1347,7 @@ input, select, textarea {
 			justify-content: center; /* centers the last row */
 			list-style: none;
 			padding-left: 0;
-			border: solid 1px #ffffff;
+			/*border: solid 1px #ffffff; */ /* This creates the outer frame */
 			border-radius: 4px;
 			flex-wrap: wrap;
 			max-width: 1100px;
