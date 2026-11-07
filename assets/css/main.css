@@ -1665,24 +1665,14 @@ input, select, textarea {
     }
 }
 
-/* Remove the outer navigation frame on all devices */
+/* Navigation: independent tabs on all devices */
 #header nav ul {
     border: none !important;
     box-shadow: none !important;
 }
 
-/* Give every individual tab its own border */
 #header nav ul li {
     border: 1px solid #ffffff !important;
     border-radius: 4px;
     margin: 2px !important;
-}
-
-/* Override the original mobile border-removal rules */
-#header nav ul li:first-child {
-    border-top: 1px solid #ffffff !important;
-}
-
-#header nav ul li {
-    border-left: 1px solid #ffffff !important;
 }
