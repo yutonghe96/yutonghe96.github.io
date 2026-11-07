@@ -1665,15 +1665,19 @@ input, select, textarea {
     }
 }
 
+@media screen and (max-width: 736px) {
+    #header nav ul {
+        border: none;
+    }
+}
+
 @media screen and (max-width: 480px) {
-    /* Give every mobile tab a complete border */
     #header nav ul li {
         border: 1px solid #ffffff;
-        border-radius: 4px;
+        border-radius: 0;
     }
 
-    /* Restore spacing between tabs */
     #header nav ul li + li {
-        margin-top: 0.5em;
+        margin-top: 0;
     }
 }
