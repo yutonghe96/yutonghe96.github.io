@@ -1659,7 +1659,21 @@ input, select, textarea {
 		}
 
 		@media screen and (max-width: 736px) {
+    /* Remove the outer navigation frame */
     #header nav ul {
         border: none;
+    }
+}
+
+@media screen and (max-width: 480px) {
+    /* Give every mobile tab a complete border */
+    #header nav ul li {
+        border: 1px solid #ffffff;
+        border-radius: 4px;
+    }
+
+    /* Restore spacing between tabs */
+    #header nav ul li + li {
+        margin-top: 0.5em;
     }
 }
