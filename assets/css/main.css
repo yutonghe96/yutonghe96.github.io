@@ -1665,24 +1665,24 @@ input, select, textarea {
     }
 }
 
-/* Remove outer navigation frame on narrow screens,
-   including phones in landscape */
-@media screen and (max-width: 980px) {
-    #header nav ul {
-        border: none;
-    }
+/* Remove the outer navigation frame on all devices */
+#header nav ul {
+    border: none !important;
+    box-shadow: none !important;
 }
 
-/* Individual tabs on phones in portrait */
-@media screen and (max-width: 480px) {
-    #header nav ul li {
-        border: 1px solid #ffffff;
-        border-radius: 0;
-        margin: 0;
-    }
+/* Give every individual tab its own border */
+#header nav ul li {
+    border: 1px solid #ffffff !important;
+    border-radius: 4px;
+    margin: 2px !important;
+}
 
-    /* Restore the missing top border */
-    #header nav ul li:first-child {
-        border-top: 1px solid #ffffff;
-    }
+/* Override the original mobile border-removal rules */
+#header nav ul li:first-child {
+    border-top: 1px solid #ffffff !important;
+}
+
+#header nav ul li {
+    border-left: 1px solid #ffffff !important;
 }
