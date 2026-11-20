@@ -796,6 +796,8 @@ def create_tree(
         log_scale=False,
         value_fmt=None,
         pct_fmt=None,
+        name_dict=None,
+        wrap_labels=True,
         save_path=None
         ):
     # expand_others: keep the countries merged into each group's 'Others' tile
@@ -814,6 +816,10 @@ def create_tree(
     # pct_fmt: optional function (value, share of total) -> percentage text
     # (e.g. one decimal for small values), or ''/None to leave it out; default
     # is a whole-number percent.
+    # name_dict: optional {original name: display name} for the feat column
+    # (e.g. {'Russian Federation': 'Russia'}); names not in it are kept.
+    # wrap_labels: break long tile names over several lines; False keeps every
+    # name on one line.
 
     # ------------------ Font sizes ------------------
     if font_size_dict is not None:
@@ -827,6 +833,9 @@ def create_tree(
 
     TREE_TEXT_TEMPLATE = "<br>%{label}<br>(%{value:.0f}, %{percentRoot:.0%})"
 
+    df = df.copy()
+    if name_dict:
+        df[feat] = df[feat].replace(name_dict)
     df_orig = df.copy()
     df_copy = df.copy()
 
@@ -898,7 +907,7 @@ def create_tree(
     def wrap_feat(row):
         text = row[feat]
         max_len = row['line_length']
-        if len(text) <= max_len:
+        if not wrap_labels or len(text) <= max_len:
             return text
         words = text.split(' ')
         lines = []

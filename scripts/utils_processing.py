@@ -350,7 +350,7 @@ def format_days_to_ymwd(n):
             x = int(round(x))
         else:
             x = round(x, 2)
-        return f"{x} day" if x == 1 else f"{x} days"
+        return f"{x} day" if x <= 1 else f"{x} days"
     if n == 1:
         return "1 day"
     # Days only

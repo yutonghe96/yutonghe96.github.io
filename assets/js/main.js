@@ -53,18 +53,6 @@
 
 		}
 
-	// Nav.
-		var $nav = $header.children('nav'),
-			$nav_li = $nav.find('li');
-
-		// Add "middle" alignment classes if we're dealing with an even number of items.
-			if ($nav_li.length % 2 == 0) {
-
-				$nav.addClass('use-middle');
-				$nav_li.eq( ($nav_li.length / 2) ).addClass('is-middle');
-
-			}
-
 	// Main.
 		var	delay = 325,
 			locked = false;
@@ -286,10 +274,42 @@
 
 			};
 
-		// Articles.
-			$main_articles.each(function() {
+		// Tab switching: step to the previous / next article (in page order,
+		// wrapping around) without going back to the home screen.
+			var article_ids = $main_articles.map(function() { return this.id; }).get();
 
-				var $this = $(this);
+			var article_name = function(id) {
+				var $link = $header.find('nav a[href="#' + id + '"]');
+				return $link.length ? $link.text() : id;
+			};
+
+			var step_article = function(offset) {
+				var i = article_ids.indexOf(location.hash.substr(1));
+				if (i == -1)
+					return;
+				location.hash = '#' + article_ids[(i + offset + article_ids.length) % article_ids.length];
+			};
+
+		// Articles.
+			$main_articles.each(function(i) {
+
+				var $this = $(this),
+					n = article_ids.length,
+					prev_name = article_name(article_ids[(i - 1 + n) % n]),
+					next_name = article_name(article_ids[(i + 1) % n]);
+
+				// Previous / next.
+					if (n > 1) {
+						$('<div class="prev">Previous</div>')
+							.attr({ title: prev_name, 'aria-label': 'Previous: ' + prev_name, role: 'button' })
+							.appendTo($this)
+							.on('click', function() { step_article(-1); });
+
+						$('<div class="next">Next</div>')
+							.attr({ title: next_name, 'aria-label': 'Next: ' + next_name, role: 'button' })
+							.appendTo($this)
+							.on('click', function() { step_article(1); });
+					}
 
 				// Close.
 					$('<div class="close">Close</div>')
@@ -323,6 +343,15 @@
 						// Article visible? Hide.
 							if ($body.hasClass('is-article-visible'))
 								$main._hide(true);
+
+						break;
+
+					case 37:
+					case 39:
+
+						// Article visible? Step to the previous / next one.
+							if ($body.hasClass('is-article-visible'))
+								step_article(event.keyCode == 37 ? -1 : 1);
 
 						break;
 
