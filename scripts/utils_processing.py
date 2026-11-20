@@ -107,9 +107,9 @@ def transform_verbose_to_calendar(df, save=False):
     cols = ['total_days'] + [c for c in grouped.columns if c != 'total_days']
     final_df = grouped[cols].reset_index()
 
-    # Step 7: Add continent column
+    # Step 7: Add continent column (7-continent scheme: North / South America split)
     final_df['continent'] = final_df['country'].apply(
-        lambda x: coco.convert(names=x, to='continent') if x != 'All' else None
+        lambda x: coco.convert(names=x, to='continent_7') if x != 'All' else None
     )
 
     # Step 8: Reorder columns

@@ -762,6 +762,24 @@ def create_map(
 
     return fig.show(config=config)
 
+# Treemap drill-down: cancel the click (no zoom) on leaf tiles, i.e. single
+# countries, so only tiles that contain other tiles (e.g. 'Others') zoom in.
+_TREE_LEAF_NOZOOM_SCRIPT = r"""
+(function(){
+  var gd = document.getElementById('{plot_id}');
+  if (!gd || !gd.on) return;
+  var trace = gd.data[0];
+  var hasChildren = {};
+  (trace.parents || []).forEach(function(p){ if (p) hasChildren[p] = true; });
+  gd.on('plotly_treemapclick', function(e){
+    var pt = e && e.points && e.points[0];
+    if (!pt) return;
+    var id = pt.id !== undefined ? pt.id : trace.ids[pt.pointNumber];
+    if (!hasChildren[id]) return false;
+  });
+})();
+"""
+
 def create_tree(
         df,
         feat='genre',
@@ -773,8 +791,29 @@ def create_tree(
         title=None,
         color_dict={'Movie': 'royalblue', 'TV': 'gold', 'Others': 'white'},
         font_size_dict=None,
+        expand_others=False,
+        start_collapsed=False,
+        log_scale=False,
+        value_fmt=None,
+        pct_fmt=None,
         save_path=None
         ):
+    # expand_others: keep the countries merged into each group's 'Others' tile
+    # as hidden children, so clicking 'Others' zooms in to show them (only for
+    # group_flag=True with threshold_global=False).
+    # start_collapsed: put all groups under one top tile labelled with the title
+    # and open on the groups only; clicking a group zooms into its tiles (only
+    # for group_flag=True).
+    start_collapsed = start_collapsed and group_flag
+    # log_scale: size each tile by log(1 + value) instead of value: groups by
+    # log of their own total, and tiles within a group split the group's area
+    # in proportion to their own log(1 + value). Labels still show the real
+    # values and percentages.
+    # value_fmt: optional function turning a value into the text shown on its
+    # tile (e.g. days -> '45 days' / '2.3 years'); default prints the number.
+    # pct_fmt: optional function (value, share of total) -> percentage text
+    # (e.g. one decimal for small values), or ''/None to leave it out; default
+    # is a whole-number percent.
 
     # ------------------ Font sizes ------------------
     if font_size_dict is not None:
@@ -833,7 +872,13 @@ def create_tree(
                 else:
                     other_row = {feat: 'Others', flag: f, var: small_entries[var].sum()}
                     aggregated_rows.append(pd.DataFrame([other_row]))
+                    if expand_others and group_flag:
+                        aggregated_rows.append(small_entries.assign(_in_others=True))
         df_copy = pd.concat(aggregated_rows, ignore_index=True)
+    if '_in_others' not in df_copy.columns:
+        df_copy['_in_others'] = False
+    df_copy['_in_others'] = df_copy['_in_others'].eq(True)
+    drilldown = bool(df_copy['_in_others'].any()) or start_collapsed
 
     if 'Others' not in color_dict:
         color_dict['Others'] = 'gray'
@@ -880,12 +925,18 @@ def create_tree(
         df_copy['parent'] = df_copy['flag_id']
         df_copy['label'] = df_copy[feat_wrapped]
 
+        # Countries folded into 'Others' hang under that group's 'Others' tile
+        in_others = df_copy['_in_others']
+        df_copy.loc[in_others, 'parent'] = df_copy.loc[in_others, 'flag_id'] + ' | Others'
+        df_copy.loc[in_others, 'id'] = df_copy.loc[in_others, 'parent'] + ' | ' + df_copy.loc[in_others, feat_wrapped]
+
         # ----- parent blocks -----
         # A block's numbers are built from what its sub-blocks actually display,
         # not from rounding the block's own total: rounding the sum and summing
         # the roundings disagree (e.g. 4.6 + 1.6 shows as 5 + 2 = 7, while the
         # 6.2 total would show as 6).
-        root_total = df_copy[var].sum()
+        # Countries inside 'Others' are already counted in the 'Others' tile
+        root_total = df_copy.loc[~df_copy['_in_others'], var].sum()
 
         def round_display(x):
             # Match plotly's ':.0f' / ':.0%' (round halves away from zero)
@@ -896,26 +947,77 @@ def create_tree(
             lambda v: round_display(100 * v / root_total) if root_total > 0 else 0
         )
 
-        parent_df = df_copy.groupby('flag_id', as_index=False).agg(
+        # Children of 'Others' are already counted in the 'Others' tile itself
+        parent_df = df_copy[~df_copy['_in_others']].groupby('flag_id', as_index=False).agg(
             **{var: (var, 'sum'), '_shown_var': ('_shown_var', 'sum'), '_shown_pct': ('_shown_pct', 'sum')}
         )
+        if start_collapsed:
+            # Groups are shown on their own first (tiles hidden), so round each
+            # group's own total; summing many rounded-down tiles can show 0%
+            parent_df['_shown_var'] = parent_df[var].apply(round_display)
+            # Under 1%: one decimal, so a small group doesn't read as 0%
+            parent_df['_shown_pct'] = parent_df[var].apply(
+                lambda v: (0 if root_total <= 0
+                           else f"{100 * v / root_total:.1f}" if 100 * v / root_total < 1
+                           else round_display(100 * v / root_total))
+            )
         parent_df[flag] = parent_df['flag_id']
         parent_df['id'] = parent_df['flag_id']
         parent_df['parent'] = ""
+        def group_label(name, v, shown_var, shown_pct):
+            # 'Name (value, pct)' for a tile holding other tiles; value_fmt /
+            # pct_fmt override the defaults, and an empty pct is left out.
+            # Leading breaks push it toward the top so it doesn't overlap the
+            # tiles inside when zoomed in.
+            if value_fmt is not None:
+                shown_var = value_fmt(v)
+            if pct_fmt is not None:
+                shown_pct = pct_fmt(v, v / root_total if root_total > 0 else 0)
+            else:
+                shown_pct = f"{shown_pct}%"
+            pct_part = f", {shown_pct}" if shown_pct else ""
+            return f"<br><br>{name} ({shown_var}{pct_part})"
+
         parent_df['label'] = parent_df.apply(
-            lambda r: f"{r['flag_id']} ({r['_shown_var']}, {r['_shown_pct']}%)",
+            lambda r: group_label(r['flag_id'], r[var], r['_shown_var'], r['_shown_pct']),
             axis=1
         )
-
-        # Push parent labels toward top so they don't overlap children when centered
-        parent_df['label'] = parent_df['label'].apply(lambda s: '<br><br>' + s)
 
         # Parents print their pre-computed label (numbers already summed from the
         # children); children get the value/percent straight from the treemap.
         parent_df['_texttemplate'] = '<br>%{label}'
         df_copy['_texttemplate'] = TREE_TEXT_TEMPLATE
+        # Countries inside 'Others' are small by definition: keep one decimal
+        # (trailing zeros trimmed) so sub-1 values don't all read as 0
+        df_copy.loc[df_copy['_in_others'], '_texttemplate'] = (
+            "<br>%{label}<br>(%{value:.1~f}, %{percentRoot:.1~%})"
+        )
+        # An expanded 'Others' tile is a group too: label it like the groups,
+        # so its total stays visible in the header once clicked into
+        expanded = df_copy['id'].isin(df_copy.loc[df_copy['_in_others'], 'parent'])
+        df_copy.loc[expanded, 'label'] = df_copy.loc[expanded, var].apply(
+            lambda v: group_label(
+                'Others', v, round_display(v),
+                round_display(100 * v / root_total) if root_total > 0 else 0,
+            )
+        )
+        df_copy.loc[expanded, '_texttemplate'] = '<br>%{label}'
 
         df_copy = pd.concat([parent_df, df_copy], ignore_index=True)
+
+        if start_collapsed:
+            # One explicit top tile above the groups: with maxdepth=2 the first
+            # view is top tile + groups, and zooming into a group shows its tiles
+            ROOT_ID = '__root__'
+            df_copy.loc[df_copy['parent'] == "", 'parent'] = ROOT_ID
+            root_row = {
+                'id': ROOT_ID, 'parent': "", flag: ROOT_ID,
+                var: parent_df[var].sum(),
+                'label': title if title is not None else '',
+                '_texttemplate': '%{label}',
+                '_in_others': False,
+            }
+            df_copy = pd.concat([pd.DataFrame([root_row]), df_copy], ignore_index=True)
     else:
         df_copy['id'] = df_copy[flag] + ' | ' + df_copy[feat_wrapped]
         df_copy['parent'] = ""
@@ -924,13 +1026,76 @@ def create_tree(
 
     # ------------------ Colors ------------------
     df_copy['_color'] = df_copy[flag].map(color_dict).fillna('gray')
+    if start_collapsed:
+        df_copy.loc[df_copy['id'] == '__root__', '_color'] = 'rgb(17,17,17)'
+
+    # ------------------ Tile sizes ------------------
+    if log_scale:
+        # Every tile's weight is log(1 + its own real value). Built top-down:
+        # top-level tiles take their weight as size; the children of a tile
+        # are scaled so they fill it exactly, in proportion to their weights.
+        # (Summing children's logs bottom-up instead would make a group with
+        # many small tiles outgrow one with a few large tiles.)
+        ids = df_copy['id'].tolist()
+        parent_of = dict(zip(ids, df_copy['parent']))
+        weight = dict(zip(ids, np.log1p(df_copy[var].astype(float))))
+        children = {}
+        for i in ids:
+            if parent_of[i]:
+                children.setdefault(parent_of[i], []).append(i)
+
+        size = {}
+        queue = [i for i in ids if not parent_of[i]]
+        for i in queue:
+            size[i] = weight[i]
+        while queue:
+            i = queue.pop()
+            kids = children.get(i, [])
+            total_w = sum(weight[k] for k in kids)
+            # Shrink a hair so float error never lets children exceed the parent
+            scale = size[i] / total_w * (1 - 1e-9) if total_w > 0 else 0.0
+            for k in kids:
+                size[k] = weight[k] * scale
+            queue.extend(kids)
+        df_copy['_size'] = df_copy['id'].map(size)
+    else:
+        df_copy['_size'] = df_copy[var]
+
+    # ------------------ Tile text ------------------
+    # With log sizes the treemap's own %{value} / %{percentRoot} refer to the
+    # log sizes, and value_fmt needs Python-side text: in both cases labels
+    # read the real value / percent / formatted text from customdata instead
+    customdata = None
+    if log_scale or value_fmt is not None or pct_fmt is not None:
+        # Top-level tiles (groups, or every tile when flat) add up to the total
+        top_level = df_copy['parent'].isin(['', '__root__']) & (df_copy['id'] != '__root__')
+        real_total = df_copy.loc[top_level, var].sum()
+        customdata = np.column_stack([
+            df_copy[var].astype(object),
+            (df_copy[var] / real_total if real_total > 0 else 0 * df_copy[var]).astype(object),
+            df_copy[var].apply(value_fmt) if value_fmt is not None else df_copy[var].astype(str),
+        ])
+        if pct_fmt is not None:
+            pct_text = [(', ' + t) if t else '' for t in
+                        (pct_fmt(v, f) for v, f in zip(customdata[:, 0], customdata[:, 1]))]
+            customdata = np.column_stack([customdata, np.array(pct_text, dtype=object)])
+        tt = df_copy['_texttemplate']
+        if value_fmt is not None:
+            tt = tt.str.replace(r'%\{value(:[^}]*)?\}', '%{customdata[2]}', regex=True)
+        if pct_fmt is not None:
+            tt = tt.str.replace(r', %\{percentRoot(:[^}]*)?\}', '%{customdata[3]}', regex=True)
+        df_copy['_texttemplate'] = (
+            tt.str.replace('%{value', '%{customdata[0]', regex=False)
+              .str.replace('%{percentRoot', '%{customdata[1]', regex=False)
+        )
 
     # ------------------ Treemap ------------------
     fig = go.Figure(go.Treemap(
         ids=df_copy['id'],
         labels=df_copy['label'],
         parents=df_copy['parent'],
-        values=df_copy[var],
+        values=df_copy['_size'],
+        customdata=customdata,
         marker=dict(
             colors=df_copy['_color'],
             line=dict(color='black', width=1)
@@ -940,7 +1105,11 @@ def create_tree(
         textposition="top left",
         textfont=dict(size=TREE_TEXT_SIZE),
         hoverinfo='none',
-        branchvalues='total'
+        branchvalues='total',
+        # With drill-down, show two levels from the current tile: groups + tiles
+        # (or top tile + groups when start_collapsed); deeper levels such as the
+        # countries inside 'Others' appear once their parent is clicked
+        maxdepth=2 if drilldown else -1,
     ))
 
     # ------------------ Title (flat only) ------------------
@@ -967,7 +1136,8 @@ def create_tree(
 
     fig.update_layout(
         title=dict(
-        text=title,
+        # With start_collapsed the title is already the top tile's label
+        text=None if start_collapsed else title,
         x=0.5,
         xanchor='center',
         y=0.99,
@@ -987,8 +1157,12 @@ def create_tree(
     )
 
     # ------------------ Output ------------------
-    config = {'staticPlot': True}
+    # Clicks must stay live for the 'Others' drill-down; otherwise keep it static
+    config = {'displayModeBar': False} if drilldown else {'staticPlot': True}
     if save_path:
-        pio.write_html(fig, file=save_path, config=config, include_plotlyjs='cdn')
+        write_kwargs = dict(file=save_path, config=config, include_plotlyjs='cdn')
+        if drilldown:
+            write_kwargs['post_script'] = _TREE_LEAF_NOZOOM_SCRIPT
+        pio.write_html(fig, **write_kwargs)
 
     return fig.show(config=config)
