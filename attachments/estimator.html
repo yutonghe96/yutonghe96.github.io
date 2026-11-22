@@ -18,9 +18,19 @@
   .plot { height: 450px; } /* fixed size: one chart's redraw/purge never moves the other */
   @media (max-width: 700px) { .plot { height: 560px; } } /* phones: extra room for the legend above the chart */
   input.bad { outline: 2px solid crimson; }
+  .tabs { display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid #ccc; }
+  .tabs button { padding: 6px 16px; border: 1px solid #ccc; border-bottom: none; background: #f4f4f4; cursor: pointer; font-size: 14px; }
+  .tabs button.active { background: #fff; font-weight: bold; margin-bottom: -1px; padding-bottom: 7px; }
+  h3 { font-size: 14px; margin: 14px 0 6px; }
+  select { width: 260px; }
+  #auto-summary { font-size: 14px; line-height: 1.5; min-height: 3em; }
+  #auto-summary b { font-weight: 600; }
 </style>
 </head>
 <body>
+<div class="tabs"><button data-tab="manual" class="active">Manual</button><button data-tab="auto">Auto</button></div>
+
+<div id="tab-manual">
 <h2>Housing payments</h2>
 <div id="housing">
 <div class="row">
@@ -45,6 +55,53 @@
 <button id="add">+ Add row</button>
 <div class="err" id="err-savings"></div>
 <div id="plot-savings" class="plot"></div>
+</div>
+
+<div id="tab-auto" hidden>
+<h2>Strategy search</h2>
+<div id="auto-inputs">
+<h3>Loan &amp; housing costs</h3>
+<div class="row">
+  <label>Mortgage (SEK)<input id="a-L" type="text" inputmode="decimal" value="2.7e6"></label>
+  <label>Down payment (SEK)<input id="a-D" type="text" inputmode="decimal" value="3e5"></label>
+  <label>Interest rate / yr<input id="a-r" type="text" inputmode="decimal" value="0.03"></label>
+  <label>Avgift / month<input id="a-A" type="text" inputmode="decimal" value="6,000"></label>
+  <label>Gross income / yr (blank = ignore)<input id="a-inc" type="text" inputmode="decimal" value=""></label>
+</div>
+<h3>Cash flow &amp; savings</h3>
+<div class="row">
+  <label>Monthly budget (SEK)<input id="a-X" type="text" inputmode="decimal" value="30,000"></label>
+  <label>Budget change / yr<input id="a-dX" type="text" inputmode="decimal" value="0.02"></label>
+  <label>Starting savings (SEK)<input id="a-P0" type="text" inputmode="decimal" value="1.7e5"></label>
+  <label>Savings buffer (SEK)<input id="a-buf" type="text" inputmode="decimal" value="100,000"></label>
+</div>
+<h3>Market &amp; tax</h3>
+<div class="row">
+  <label>Expected return / yr<input id="a-g" type="text" inputmode="decimal" value="0.07"></label>
+  <label>Volatility / yr<input id="a-sig" type="text" inputmode="decimal" value="0.15"></label>
+  <label>Interest deduction<input id="a-tau" type="text" inputmode="decimal" value="0.3"></label>
+  <label>Investment tax / yr<input id="a-kappa" type="text" inputmode="decimal" value="0.01"></label>
+</div>
+<h3>Goal</h3>
+<div class="row">
+  <label>Objective<select id="a-goal">
+    <option value="networth">Maximise final net worth</option>
+    <option value="target">Reach savings target earliest</option>
+    <option value="both">Debt-free and savings target earliest</option>
+    <option value="payoff">Pay off mortgage earliest</option>
+  </select></label>
+  <label>Savings target (SEK)<input id="a-S" type="text" inputmode="decimal" value="2e6"></label>
+  <label>Horizon (years)<input id="a-N" type="text" inputmode="decimal" value="30"></label>
+  <label>Confidence<input id="a-conf" type="text" inputmode="decimal" value="0.9"></label>
+  <label>Simulated paths<input id="a-paths" type="text" inputmode="decimal" value="1000"></label>
+</div>
+</div>
+<p><button id="a-run">Run</button> <span id="a-status" style="font-size:13px"></span></p>
+<div class="err" id="err-auto"></div>
+<div id="plot-pareto" class="plot"></div>
+<div id="auto-summary"></div>
+<div id="plot-fan" class="plot"></div>
+</div>
 
 <script>
 // The maths is described in estimator_notes.md -- keep it in sync with monthly() and compound().
@@ -94,11 +151,12 @@ function monthly(total, plan, months) {
 }
 
 function compound(base, plan, ppy = 12) {
-  const segs = plan.map(s => { const y = [].concat(s.year); return [y[0], y[y.length - 1], s]; });
+  // one-time rows have a single year (no end year); a range row like [5, 5] still spreads over that year
+  const segs = plan.map(s => { const y = [].concat(s.year); return [y[0], y[y.length - 1], s, !Array.isArray(s.year)]; });
   const n = rnd(Math.max(...segs.map(s => s[1])) * ppy), add = Array(n).fill(0), rates = Array(n).fill(null);
-  for (const [a, b, s] of segs) {
+  for (const [a, b, s, once] of segs) {
     const amt = s.yearly_addition ?? 0, ch = s.yearly_addition_change ?? 0, r = s.yearly_growth_rate;
-    if (a === b) {
+    if (once) {
       const i = Math.min(Math.max(rnd(b * ppy) - 1, 0), n - 1);
       add[i] += amt; if (r != null) rates[i] = r;
     } else {
@@ -131,9 +189,10 @@ function monthAxis(n) {
 
 // Legend beside the chart on wide screens, above it on narrow ones (phones). Either way its size depends only on the
 // trace names, never on the data, so typing in the inputs doesn't resize the plot area.
-const isNarrow = id => document.getElementById(id).clientWidth < 700;
-function legendLayout(id, wide, narrow) {
-  return isNarrow(id)
+// Measured on the page body (minus its padding) so it also works while a tab is hidden.
+const isNarrow = () => document.body.clientWidth - 32 < 700;
+function legendLayout(wide, narrow) {
+  return isNarrow()
     ? { legend: { groupclick: 'toggleitem', orientation: 'h', x: 0, xanchor: 'left', y: 1.02, yanchor: 'bottom' },
         margin: { ...narrow, t: 10, b: 50, autoexpand: true } } // top margin grows to fit the wrapped legend rows
     : { legend: { groupclick: 'toggleitem', xref: 'container', x: 1, xanchor: 'right', y: 1 },
@@ -196,7 +255,7 @@ function drawHousing() {
     yaxis: { title: { text: 'SEK / month' }, rangemode: 'tozero', tickformat: '~s' },
     yaxis2: { title: { text: 'SEK balance (% of total)' }, overlaying: 'y', side: 'right', showgrid: false,
               range: [0, y2max * 1.03], ...pctTicks(y2max, value) },
-    ...legendLayout('plot-housing', { l: 70, r: 300 }, { l: 60, r: 95 }), uirevision: 'housing',
+    ...legendLayout({ l: 70, r: 300 }, { l: 60, r: 95 }), uirevision: 'housing',
   }, { responsive: true });
 }
 
@@ -226,7 +285,7 @@ function drawSavings() {
     { x, y: d.total, name: 'total', line: { dash: 'dot', color: 'black' }, hovertemplate: hover },
   ], {
     xaxis: monthAxis(x.length), yaxis: { title: { text: 'SEK' }, tickformat: '~s' }, hovermode: 'x unified',
-    ...legendLayout('plot-savings', { l: 70, r: 130 }, { l: 60, r: 20 }), uirevision: 'savings',
+    ...legendLayout({ l: 70, r: 130 }, { l: 60, r: 20 }), uirevision: 'savings',
   }, { responsive: true });
 }
 
@@ -250,8 +309,234 @@ addRow('hplan', [4, 5], [1, 30, 0.02, 0.03, '6,000', '']);
 addRow('plan', [2], [1, 30, '12*12000', 0.01, 0.09]);
 housing(); savings();
 // Re-lay out when crossing the narrow/wide breakpoint (e.g. rotating a phone); Plotly handles ordinary resizes itself.
-let wasNarrow = isNarrow('plot-housing');
-window.addEventListener('resize', () => { if (isNarrow('plot-housing') !== wasNarrow) { wasNarrow = !wasNarrow; housing(); savings(); } });
+let wasNarrow = isNarrow();
+window.addEventListener('resize', () => { if (isNarrow() !== wasNarrow) { wasNarrow = !wasNarrow; housing(); savings(); if (auto.res) { drawPareto(); drawSelected(); } } });
+
+// ===================== Auto tab: Monte Carlo strategy search (maths in estimator_notes.md) =====================
+// The functions from mulberry32 to runGrid are self-contained: they are also stringified into a Web Worker.
+function mulberry32(a) { // small seeded PRNG, so every strategy sees the same random market paths
+  return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function normals(n, seed) { // n standard normals (Box–Muller)
+  const rand = mulberry32(seed), z = new Float64Array(n);
+  for (let i = 0; i < n; i += 2) {
+    const r = Math.sqrt(-2 * Math.log(1 - rand())), th = 2 * Math.PI * rand();
+    z[i] = r * Math.cos(th); if (i + 1 < n) z[i + 1] = r * Math.sin(th);
+  }
+  return z;
+}
+function amortRate(B, q) { // Swedish amortisation requirement from loan-to-value (+1% if loan > 4.5× gross income)
+  const ltv = B / q.V;
+  return (ltv > 0.7 ? 0.02 : ltv > 0.5 ? 0.01 : 0) + (q.income > 0 && B > 4.5 * q.income ? 0.01 : 0);
+}
+// One simulated path for one strategy pol = { alpha, theta, lump }:
+//  - each month: required repayment + after-tax interest + avgift come out of the budget; of the surplus, a share alpha
+//    is prepaid while LTV > theta, the rest is invested (a negative surplus is withdrawn from savings);
+//  - each year end, if lump !== null: move savings above the buffer into the loan, down to LTV = lump at most.
+// Monthly savings growth factors per path: lognormal with mean (1+g)^(1/12), times the yearly tax on capital.
+// Precomputed once and shared by all strategies (common random numbers); G = null means the expected path.
+function growth(q, seed) {
+  const z = normals(q.paths * q.N, seed), mu = Math.log(1 + q.g) / 12 - q.sig * q.sig / 24, sd = q.sig / Math.sqrt(12), tax = (1 - q.kappa) ** (1 / 12);
+  return z.map(v => Math.exp(mu + sd * v) * tax);
+}
+function simPath(q, pol, G, path, rec) {
+  const N = q.N, g0 = ((1 + q.g) * (1 - q.kappa)) ** (1 / 12);
+  let B = q.L, P = q.P0, p = 0, X = q.X, tT = Infinity, tF = Infinity, tTF = Infinity, ruin = false, yr = null;
+  for (let m = 0; m < N; m++) {
+    if (m % 12 === 0) { // amortisation requirement and budget are re-set once a year
+      p = amortRate(B, q); X = q.X * (1 + q.dX) ** (m / 12);
+      if (rec && rec.years) rec.years.push(yr = { repay: 0, invest: 0, lump: 0 });
+    }
+    const R = Math.min(q.L * p / 12, B), s = X - R - B * q.r / 12 * (1 - q.tau) - q.A;
+    B -= R;
+    const u = s > 0 && B / q.V > pol.theta ? Math.min(pol.alpha * s, B) : 0, v = s - u;
+    B -= u;
+    // if savings are negative (budget too small), the shortfall is treated as borrowed at the mortgage rate
+    P = P * (P < 0 ? 1 + q.r / 12 : G ? G[path * N + m] : g0) + v;
+    if (P < 0) ruin = true;
+    let lump = 0;
+    if ((m + 1) % 12 === 0 && pol.lump !== null && B / q.V > pol.lump) {
+      lump = Math.max(Math.min(B - pol.lump * q.V, P - q.buffer), 0); B -= lump; P -= lump;
+    }
+    if (yr) { yr.repay += R + u; yr.invest += v; yr.lump += lump; }
+    if (B < 1e-6) { B = 0; if (tF === Infinity) tF = m + 1; }
+    if (P >= q.S && tT === Infinity) tT = m + 1;
+    if (B === 0 && P >= q.S && tTF === Infinity) tTF = m + 1;
+    if (rec && rec.P) { rec.P[path * N + m] = P; rec.B[path * N + m] = B; }
+  }
+  return { W: P - B, tT, tF, tTF, ruin };
+}
+function quantile(arr, q) { const s = Float64Array.from(arr).sort(); return s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))]; }
+function policies() { // alpha 0..1 × theta × lump rule (theta is irrelevant when alpha = 0)
+  const out = [];
+  for (const lump of [null, 0.7, 0.5, 0]) for (let a = 0; a <= 10; a++) for (const theta of a ? [0.7, 0.5, 0.25, 0] : [0]) out.push({ alpha: a / 10, theta, lump });
+  return out;
+}
+function runGrid(q, progress) {
+  const G = growth(q, 12345), pols = policies(), res = [];
+  pols.forEach((pol, k) => {
+    const W = [], tT = [], tF = [], tTF = []; let ruin = 0;
+    for (let i = 0; i < q.paths; i++) { const o = simPath(q, pol, G, i, null); W.push(o.W); tT.push(o.tT); tF.push(o.tF); tTF.push(o.tTF); ruin += o.ruin; }
+    // pessimistic net worth = (1-conf) quantile; times = conf quantile (e.g. "reached by then in 90% of paths")
+    res.push({ pol, wLow: quantile(W, 1 - q.conf), wMed: quantile(W, 0.5), tT: quantile(tT, q.conf), tF: quantile(tF, q.conf), tTF: quantile(tTF, q.conf), ruin: ruin / q.paths });
+    if (progress && k % 8 === 0) progress(k / pols.length);
+  });
+  return res;
+}
+
+const workerSrc = [mulberry32, normals, amortRate, growth, simPath, quantile, policies, runGrid].map(String).join('\n') +
+  '\nonmessage = e => postMessage({ done: runGrid(e.data, p => postMessage({ progress: p })) });';
+const auto = { q: null, res: null, sel: 0, worker: null, clickBound: false };
+const goalKey = { networth: null, target: 'tT', both: 'tTF', payoff: 'tF' };
+const pct = v => `${Math.round(v * 100)}%`;
+const tm = m => m === Infinity ? 'not within horizon' : ymLabel(m);
+const fmt = v => Math.round(v).toLocaleString('en-US');
+function describe(pol) {
+  const pre = pol.alpha === 0 ? 'Invest all surplus'
+    : `Prepay ${pct(pol.alpha)} of surplus ${pol.theta > 0 ? `until LTV ≤ ${pct(pol.theta)}` : 'until paid off'}, invest the rest`;
+  return pre + (pol.lump === null ? '; no lump sums' : `; yearly lump sums from savings above the buffer, down to LTV ${pct(pol.lump)}`);
+}
+
+function readAuto() {
+  const v = (id, label, lo, hi, dflt) => {
+    const x = amount(id, label) ?? dflt;
+    if (x === null || !(x >= lo && x <= hi)) { document.getElementById(id).classList.add('bad'); throw new Error(`${label} must be between ${lo} and ${hi}.`); }
+    return x;
+  };
+  const L = v('a-L', 'Mortgage', 0, 1e9), D = v('a-D', 'Down payment', 0, 1e9);
+  if (!(L + D > 0)) throw new Error('Mortgage + down payment must be positive.');
+  const S = calc(document.getElementById('a-S').value);
+  return {
+    L, V: L + D, r: v('a-r', 'Interest rate', 0, 1), A: v('a-A', 'Avgift', 0, 1e7), income: v('a-inc', 'Income', 0, 1e9, 0),
+    X: v('a-X', 'Monthly budget', 0, 1e8), dX: v('a-dX', 'Budget change', -0.5, 1), P0: v('a-P0', 'Starting savings', -1e9, 1e10),
+    buffer: v('a-buf', 'Savings buffer', 0, 1e10), g: v('a-g', 'Expected return', -0.5, 1), sig: v('a-sig', 'Volatility', 0, 1),
+    tau: v('a-tau', 'Interest deduction', 0, 1), kappa: v('a-kappa', 'Investment tax', 0, 0.5),
+    S: S === null || Number.isNaN(S) ? Infinity : S, N: Math.round(v('a-N', 'Horizon', 1, 100) * 12),
+    conf: v('a-conf', 'Confidence', 0.5, 0.99), paths: Math.round(v('a-paths', 'Simulated paths', 100, 5000)),
+    goal: document.getElementById('a-goal').value,
+  };
+}
+
+function runAuto() {
+  const err = document.getElementById('err-auto'), status = document.getElementById('a-status');
+  let q;
+  try { q = readAuto(); err.textContent = ''; } catch (e) { err.textContent = e.message; return; }
+  if (q.goal !== 'networth' && q.goal !== 'payoff' && q.S === Infinity) { err.textContent = 'Set a savings target for this objective.'; return; }
+  status.textContent = 'Running…';
+  const done = res => { status.textContent = `${res.length} strategies × ${q.paths} paths`; auto.q = q; auto.res = res; auto.sel = rank()[0]; drawPareto(); drawSelected(); };
+  auto.worker?.terminate();
+  try { auto.worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }))); } catch { auto.worker = null; }
+  if (!auto.worker) { setTimeout(() => done(runGrid(q)), 0); return; } // no Worker support: run on the page (UI pauses briefly)
+  auto.worker.onmessage = e => e.data.done ? done(e.data.done) : status.textContent = `Running… ${pct(e.data.progress)}`;
+  auto.worker.onerror = e => { e.preventDefault(); auto.worker = null; done(runGrid(q)); };
+  auto.worker.postMessage(q);
+}
+
+// Strategies sorted best-first: feasible ones (shortfall risk ≤ 1 - conf) first, then by the goal's time (if any),
+// then by pessimistic final net worth. Returns indices into auto.res.
+function rank() {
+  const { q, res } = auto, key = goalKey[q.goal], cmp = (a, b) => a === b ? 0 : a < b ? -1 : 1;
+  const ok = r => r.ruin <= 1 - q.conf;
+  return res.map((_, i) => i).sort((i, j) => {
+    const a = res[i], b = res[j];
+    return (ok(b) - ok(a)) || (key ? cmp(a[key], b[key]) : 0) || cmp(b.wLow, a.wLow);
+  });
+}
+// x axis of the trade-off chart: the goal's time; for "net worth" use debt-free+target (or payoff if no target).
+const xKey = () => goalKey[auto.q.goal] ?? (auto.q.S < Infinity ? 'tTF' : 'tF');
+const xLabel = { tT: 'savings target reached', tTF: 'debt-free and target reached', tF: 'debt-free' };
+
+function drawPareto() {
+  const { q, res } = auto, k = xKey(), H = q.N / 12, best = rank()[0];
+  const ok = r => r.ruin <= 1 - q.conf, xv = r => r[k] === Infinity ? H : r[k] / 12;
+  const front = new Set(res.map((r, i) => i).filter(i => ok(res[i]) && !res.some((o, j) => j !== i && ok(o) &&
+    o[k] <= res[i][k] && o.wLow >= res[i].wLow && (o[k] < res[i][k] || o.wLow > res[i].wLow))));
+  const text = r => `${describe(r.pol)}<br>${xLabel[k]}: ${tm(r[k])} (${pct(q.conf)} conf.)<br>final net worth: ${fmt(r.wLow)} (pessimistic), ${fmt(r.wMed)} (median)<br>shortfall risk: ${pct(r.ruin)}`;
+  const trace = (idx, name, marker) => ({ x: idx.map(i => xv(res[i])), y: idx.map(i => res[i].wLow), customdata: idx, text: idx.map(i => text(res[i])),
+    mode: 'markers', type: 'scatter', name, marker, hovertemplate: '%{text}<extra></extra>' });
+  const all = res.map((_, i) => i);
+  Plotly.react('plot-pareto', [
+    trace(all.filter(i => ok(res[i]) && !front.has(i)), 'other strategies', { color: '#bbb', size: 7 }),
+    trace(all.filter(i => !ok(res[i])), `shortfall risk > ${pct(1 - q.conf)}`, { color: 'crimson', symbol: 'x', size: 7 }),
+    trace([...front], 'best trade-offs', { color: '#1f77b4', size: 9 }),
+    trace([best], 'best for objective', { color: 'gold', symbol: 'star', size: 16, line: { color: 'black', width: 1 } }),
+    trace([auto.sel], 'selected', { color: 'rgba(0,0,0,0)', size: 20, line: { color: 'black', width: 2 } }),
+  ], {
+    xaxis: { title: { text: `years until ${xLabel[k]} (${pct(q.conf)} of paths; ${H} = not within horizon)` }, range: [0, H * 1.03] },
+    yaxis: { title: { text: `final net worth, worst ${pct(1 - q.conf)} (SEK)` }, tickformat: '~s' },
+    hovermode: 'closest', ...legendLayout({ l: 70, r: 200 }, { l: 60, r: 20 }),
+  }, { responsive: true });
+  if (!auto.clickBound) { // click a point to inspect that strategy
+    document.getElementById('plot-pareto').on('plotly_click', e => { auto.sel = e.points[0].customdata; drawPareto(); drawSelected(); });
+    auto.clickBound = true;
+  }
+}
+
+function drawSelected() {
+  const { q, res } = auto, r = res[auto.sel], N = q.N, n = q.paths;
+  const rec = { P: new Float64Array(n * N), B: new Float64Array(n * N) }, G = growth(q, 12345);
+  for (let i = 0; i < n; i++) simPath(q, r.pol, G, i, rec);
+  const W = rec.P.map((v, i) => v - rec.B[i]), lo = 1 - q.conf, hi = q.conf;
+  const band = arr => { // per-month quantiles across paths
+    const out = [[], [], []], col = new Float64Array(n);
+    for (let m = 0; m < N; m++) {
+      for (let i = 0; i < n; i++) col[i] = arr[i * N + m];
+      col.sort(); [lo, 0.5, hi].forEach((qq, k) => out[k].push(col[Math.min(n - 1, Math.max(0, Math.ceil(qq * n) - 1))]));
+    }
+    return out;
+  };
+  const x = Array.from({ length: N }, (_, m) => ymLabel(m + 1)), tr = [];
+  for (const [name, arr, color] of [['savings', rec.P, '31,119,180'], ['loan', rec.B, '214,39,40'], ['net worth', W, '44,160,44']]) {
+    const [a, med, b] = band(arr);
+    tr.push({ x, y: a, name: `${name} ${pct(lo)}`, line: { width: 0 }, legendgroup: name, showlegend: false, hovertemplate: hover },
+            { x, y: b, name: `${name} ${pct(hi)}`, line: { width: 0 }, fill: 'tonexty', fillcolor: `rgba(${color},0.15)`, legendgroup: name, showlegend: false, hovertemplate: hover },
+            { x, y: med, name: `${name} (median)`, line: { color: `rgb(${color})` }, legendgroup: name, hovertemplate: hover });
+  }
+  Plotly.react('plot-fan', tr, {
+    xaxis: monthAxis(N), yaxis: { title: { text: `SEK (median, ${pct(lo)}–${pct(hi)} band)` }, tickformat: '~s' }, hovermode: 'x unified',
+    ...legendLayout({ l: 70, r: 160 }, { l: 60, r: 20 }),
+  }, { responsive: true });
+  const best = rank()[0] === auto.sel;
+  document.getElementById('auto-summary').innerHTML =
+    `<b>${best ? 'Best for objective' : 'Selected'}:</b> ${describe(r.pol)}.<br>` +
+    `Final net worth (savings − loan): median ${fmt(r.wMed)}, worst ${pct(lo)} ${fmt(r.wLow)} · ` +
+    `debt-free: ${tm(r.tF)} · savings target: ${tm(r.tT)} · both: ${tm(r.tTF)} (each reached in ${pct(q.conf)} of paths) · ` +
+    `shortfall risk: ${pct(r.ruin)} ` +
+    `<button id="a-apply">Apply to manual</button>`;
+  document.getElementById('a-apply').onclick = () => applyToManual(q, r.pol);
+}
+
+// Fill the manual tab with the selected strategy run on the expected-return path (no volatility), one row per year.
+function applyToManual(q, pol) {
+  const rec = { years: [] }; simPath(q, pol, null, 0, rec);
+  const set = (id, v) => document.getElementById(id).value = fmt(v);
+  set('mortgage', q.L); set('down', q.V - q.L); set('base', q.P0);
+  for (const id of ['hplan', 'plan']) document.getElementById(id).innerHTML = '';
+  const H = [], S = [], rho = +((1 + q.g) * (1 - q.kappa) - 1).toFixed(5);
+  rec.years.forEach((y, i) => {
+    const yr = i + 1, rate = q.L ? +(y.repay / q.L).toFixed(5) : 0, last = H[H.length - 1];
+    if (last && last[2] === rate && !y.lump) last[1] = yr; // merge consecutive years with the same repayment and no lump
+    else H.push([yr, yr, rate, q.r, fmt(q.A), y.lump ? fmt(-y.lump) : '']);
+    const lastS = S[S.length - 1], add = Math.round(y.invest);
+    if (lastS && lastS[2] === fmt(add) && lastS[1] === yr - 1) lastS[1] = yr;
+    else S.push([yr, yr, fmt(add), 0, yr === 1 ? rho : '']);
+    if (y.lump) S.push([yr, '', fmt(-y.lump), '', '']); // the lump sum leaves savings at the same year end
+  });
+  H.forEach(row => addRow('hplan', [4, 5], row)); S.forEach(row => addRow('plan', [2], row));
+  showTab('manual'); housing(); savings();
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  for (const t of ['manual', 'auto']) document.getElementById(`tab-${t}`).hidden = t !== name;
+  if (name === 'auto' && !auto.res) runAuto();
+  // charts drawn while hidden have no size; resize the visible ones
+  document.querySelectorAll(`#tab-${name} .plot`).forEach(el => el.data && Plotly.Plots.resize(el));
+}
+document.querySelector('.tabs').addEventListener('click', e => e.target.dataset.tab && showTab(e.target.dataset.tab));
+document.getElementById('a-run').addEventListener('click', runAuto);
+document.getElementById('auto-inputs').addEventListener('keydown', e => e.key === 'Enter' && runAuto());
+
 </script>
 </body>
 </html>

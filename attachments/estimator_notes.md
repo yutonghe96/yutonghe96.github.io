@@ -62,7 +62,7 @@ $$
 
 ## Optimisation: prepay the mortgage or invest?
 
-*Not implemented in `estimator.html`; this section outlines the model.*
+This section outlines the general model. The **Auto** tab implements step 4 below; see the last subsection for exactly how.
 
 Each month a surplus can either pay down the loan, which saves future interest, or be invested, which earns compound growth. Avgift is the same under every strategy, so it drops out of the comparison.
 
@@ -128,3 +128,47 @@ Under uncertainty, maximise $\mathbb{E}[U(W)]$ or a chosen percentile of $W$ ins
    \tilde g_{\text{CE}} \approx \tilde g - \tfrac{1}{2}\gamma\sigma^2,
    $$
    where $\sigma$ is volatility and $\gamma$ is risk aversion. Also factor in liquidity: prepaid equity can't easily be withdrawn.
+
+### Auto tab implementation
+
+**Market paths.** Monthly growth factors come from $n$ seeded standard normals $z_{i,m}$, the same for every strategy (common random numbers):
+
+$$
+G_{i,m} = \exp\!\left(\frac{\ln(1+g)}{12} - \frac{\sigma^2}{24} + \frac{\sigma}{\sqrt{12}}\, z_{i,m}\right)(1-\kappa)^{1/12},
+\qquad \mathbb{E}\!\left[G^{12}\right] = (1+g)(1-\kappa).
+$$
+
+**Monthly step** for strategy $(\alpha, \theta, \lambda)$ on path $i$. The budget is $X_m = X\,(1+\Delta)^{\lfloor m/12 \rfloor}$, and $p$ is re-set from $p(B)$ at the start of each year:
+
+$$
+\begin{aligned}
+s_m &= X_m - R_m - \frac{B_m\, r}{12}(1-\tau) - A && \text{surplus} \\
+u_m &= \alpha\, s_m \cdot \mathbf{1}[\,s_m > 0,\ B/V > \theta\,] && \text{prepayment} \\
+v_m &= s_m - u_m && \text{invested; negative = withdrawn} \\
+P_{m+1} &= P_m\, G_{i,m} + v_m && \text{(at rate } 1 + r/12 \text{ while } P < 0\text{)}
+\end{aligned}
+$$
+
+**Yearly lump sum** (if $\lambda$ is set), at each year end: move savings above the buffer $K$ into the loan, down to LTV $\lambda$ at most:
+
+$$
+\ell = \max\!\big(\min(B - \lambda V,\; P - K),\; 0\big), \qquad B \leftarrow B - \ell, \quad P \leftarrow P - \ell.
+$$
+
+**Strategy grid:** $\alpha \in \{0, 0.1, \dots, 1\}$, $\theta \in \{70\%, 50\%, 25\%, 0\}$, $\lambda \in \{\text{none}, 70\%, 50\%, 0\}$. That gives 164 distinct strategies.
+
+**Scores** per strategy, over $n$ paths, at confidence $c$:
+
+- pessimistic final net worth: the $(1-c)$-quantile of $W = P_N - B_N$
+- for each goal time (savings $\ge$ target, debt-free, or both): the $c$-quantile of the first month it happens, or $\infty$ if it never does within the horizon
+- shortfall risk: the share of paths where $P < 0$ at some point
+
+**Ranking:** strategies with shortfall risk $\le 1-c$ come first. Then sort by the objective's goal time, or by pessimistic net worth for "maximise final net worth", with ties broken by pessimistic net worth. The chart also highlights the best trade-offs: strategies that no other strategy beats on both goal time and pessimistic net worth.
+
+**Apply to manual** runs the selected strategy on the expected path ($G = ((1+g)(1-\kappa))^{1/12}$) and writes one row per year:
+
+- housing repayment rate $= \sum_\text{year}(R + u)\,/\,L$
+- savings yearly addition $= \sum_\text{year} v$, with growth rate $(1+g)(1-\kappa)-1$
+- each lump sum $\ell$ as $-\ell$ in both tables
+
+Consecutive years with identical values are merged.
