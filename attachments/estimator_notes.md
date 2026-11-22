@@ -56,7 +56,7 @@ This uses an effective annual rate: twelve months at $\rho$ multiply the balance
 
 $$
 \text{contributed}_m = P_0 + \sum_{k \le m} c_k, \qquad
-\text{interest}_m = P_m - \text{contributed}_m, \qquad
+\text{return}_m = P_m - \text{contributed}_m, \qquad
 \text{total}_m = P_m
 $$
 

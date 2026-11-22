@@ -16,6 +16,7 @@
   html { scrollbar-gutter: stable; overflow-y: scroll; } /* scrollbar never toggles, so page width never changes */
   .err { color: crimson; font-size: 13px; min-height: 1.3em; } /* reserve space: error text doesn't shift layout */
   .plot { height: 450px; } /* fixed size: one chart's redraw/purge never moves the other */
+  @media (max-width: 700px) { .plot { height: 560px; } } /* phones: extra room for the legend above the chart */
   input.bad { outline: 2px solid crimson; }
 </style>
 </head>
@@ -105,12 +106,12 @@ function compound(base, plan, ppy = 12) {
       for (let k = 0; k < en - st; k++) { add[st + k] += amt / ppy * (1 + ch) ** (k / ppy); if (r != null) rates[st + k] = r; }
     }
   }
-  const o = { contributed: [], interest: [], total: [] };
+  const o = { contributed: [], return: [], total: [] };
   let rate = 0, bal = base, con = base;
   for (let i = 0; i < n; i++) {
     if (rates[i] !== null) rate = rates[i];
     bal += bal * ((1 + rate) ** (1 / ppy) - 1) + add[i]; con += add[i];
-    o.contributed.push(con); o.interest.push(bal - con); o.total.push(bal);
+    o.contributed.push(con); o.return.push(bal - con); o.total.push(bal);
   }
   return o;
 }
@@ -126,6 +127,17 @@ function monthAxis(n) {
   const step = [1, 2, 5, 10, 20, 50].find(s => n / 12 / s <= 12) ?? 100, tickvals = [], ticktext = [];
   for (let y = step; y * 12 <= n; y += step) { tickvals.push(ymLabel(y * 12)); ticktext.push(y); }
   return { type: 'category', title: { text: 'year' }, ...(tickvals.length && { tickmode: 'array', tickvals, ticktext }) };
+}
+
+// Legend beside the chart on wide screens, above it on narrow ones (phones). Either way its size depends only on the
+// trace names, never on the data, so typing in the inputs doesn't resize the plot area.
+const isNarrow = id => document.getElementById(id).clientWidth < 700;
+function legendLayout(id, wide, narrow) {
+  return isNarrow(id)
+    ? { legend: { groupclick: 'toggleitem', orientation: 'h', x: 0, xanchor: 'left', y: 1.02, yanchor: 'bottom' },
+        margin: { ...narrow, t: 10, b: 50, autoexpand: true } } // top margin grows to fit the wrapped legend rows
+    : { legend: { groupclick: 'toggleitem', xref: 'container', x: 1, xanchor: 'right', y: 1 },
+        margin: { ...wide, t: 20, b: 50, autoexpand: false } }; // anchored to the container edge, margins fixed
 }
 
 function guarded(fn, errId) { // a failure in one chart shows a message instead of breaking the page
@@ -177,16 +189,14 @@ function drawHousing() {
     t('repayment', { legendgroup: 'p', legendgrouptitle: { text: 'Left axis (payment)' } }),
     t('interest', { legendgroup: 'p' }), t('avgift', { legendgroup: 'p' }), t('total', { legendgroup: 'p' }),
     t('paid', { ...bal('paid'), legendgrouptitle: { text: 'Right axis (balance)' } }), t('remaining', bal('remaining')),
-    t('cumulative', { ...bal('cumulative'), name: 'cumulative payment', line: { dash: 'dot' } }),
-    t('cumulative_ex', { ...bal('cumulative_ex'), name: 'cumulative excl. avgift', line: { dash: 'dot' } }),
+    t('cumulative', { ...bal('cumulative'), name: 'cumulative', line: { dash: 'dot' } }),
+    t('cumulative_ex', { ...bal('cumulative_ex'), name: 'cumulative ex. avgift', line: { dash: 'dot' } }),
   ], {
     xaxis: monthAxis(months), hovermode: 'x unified',
     yaxis: { title: { text: 'SEK / month' }, rangemode: 'tozero', tickformat: '~s' },
     yaxis2: { title: { text: 'SEK balance (% of total)' }, overlaying: 'y', side: 'right', showgrid: false,
               range: [0, y2max * 1.03], ...pctTicks(y2max, value) },
-    // Legend anchored to the container edge (not the plot width) and margins fixed, so the plot area never resizes.
-    legend: { groupclick: 'toggleitem', xref: 'container', x: 1, xanchor: 'right', y: 1 },
-    margin: { l: 70, r: 300, t: 20, b: 50, autoexpand: false }, uirevision: 'housing',
+    ...legendLayout('plot-housing', { l: 70, r: 300 }, { l: 60, r: 95 }), uirevision: 'housing',
   }, { responsive: true });
 }
 
@@ -212,12 +222,11 @@ function drawSavings() {
   const d = compound(amount('base', 'base'), plan), x = d.total.map((_, i) => ymLabel(i + 1));
   Plotly.react('plot-savings', [
     { x, y: d.contributed, name: 'contributed', stackgroup: 'one', hovertemplate: hover },
-    { x, y: d.interest, name: 'interest', stackgroup: 'one', hovertemplate: hover },
+    { x, y: d.return, name: 'return', stackgroup: 'one', hovertemplate: hover },
     { x, y: d.total, name: 'total', line: { dash: 'dot', color: 'black' }, hovertemplate: hover },
   ], {
     xaxis: monthAxis(x.length), yaxis: { title: { text: 'SEK' }, tickformat: '~s' }, hovermode: 'x unified',
-    legend: { xref: 'container', x: 1, xanchor: 'right', y: 1 },
-    margin: { l: 70, r: 130, t: 20, b: 50, autoexpand: false }, uirevision: 'savings',
+    ...legendLayout('plot-savings', { l: 70, r: 130 }, { l: 60, r: 20 }), uirevision: 'savings',
   }, { responsive: true });
 }
 
@@ -240,6 +249,9 @@ document.getElementById('add').addEventListener('click', () => { addRow('plan', 
 addRow('hplan', [4, 5], [1, 30, 0.02, 0.03, '6,000', '']);
 addRow('plan', [2], [1, 30, '12*12000', 0.01, 0.09]);
 housing(); savings();
+// Re-lay out when crossing the narrow/wide breakpoint (e.g. rotating a phone); Plotly handles ordinary resizes itself.
+let wasNarrow = isNarrow('plot-housing');
+window.addEventListener('resize', () => { if (isNarrow('plot-housing') !== wasNarrow) { wasNarrow = !wasNarrow; housing(); savings(); } });
 </script>
 </body>
 </html>
