@@ -10,33 +10,33 @@ Maths behind `estimator.html`. Both models step monthly: months are $m = 1, 2, \
 
 ## Housing payments
 
-Inputs: mortgage $L$, down payment $D$; per row: yearly repayment rate $p$, yearly interest rate $r$, monthly avgift $A$, lump sum $S$.
+Inputs: mortgage $L_0$, down payment $D$; per row: yearly repayment rate $p$, yearly interest rate $r$, monthly avgift $A$, lump sum $\ell$.
 
-With remaining loan $B_m$ at the start of month $m$ ($B_1 = L$):
+With remaining loan $L_m$ at the start of month $m$ ($L_1 = L_0$):
 
 $$
 \begin{aligned}
-R_m &= \min\!\left(\frac{L\,p_m}{12},\; B_m\right) && \text{repayment: a share of the original loan, capped at what's left} \\
-I_m &= \frac{B_m\, r_m}{12} && \text{interest: nominal annual rate, compounded monthly} \\
+R_m &= \min\!\left(\frac{L_0\,p_m}{12},\; L_m\right) && \text{repayment: a share of the original loan, capped at what's left} \\
+I_m &= \frac{L_m\, r_m}{12} && \text{interest: nominal annual rate, compounded monthly} \\
 T_m &= R_m + I_m + A_m && \text{monthly total} \\
-B_{m+1} &= \max\!\left(B_m - R_m + S_m,\; 0\right) && \text{new balance}
+L_{m+1} &= \max\!\left(L_m - R_m + \ell_m,\; 0\right) && \text{new balance}
 \end{aligned}
 $$
 
-**Lump sum:** $S_m$ is nonzero only in month $m = 12a$, the end of the row's start year $a$. It is applied after that month's payment, so the next month's interest uses the new balance. $S < 0$ pays the loan down and $S > 0$ borrows more. The amount actually applied is $\tilde S_m = B_m - R_m - B_{m+1}$, which is capped by the remaining balance.
+**Lump sum:** $\ell_m$ is nonzero only in month $m = 12a$, the end of the row's start year $a$. It is applied after that month's payment, so the next month's interest uses the new balance. $\ell < 0$ pays the loan down and $\ell > 0$ borrows more. The amount actually applied is $\tilde\ell_m = L_m - R_m - L_{m+1}$, which is capped by the remaining balance.
 
-**Plotted (right axis):** every value is also shown as a percentage of $L + D$.
+**Plotted (right axis):** every value is also shown as a percentage of $L_0 + D$.
 
 $$
 \begin{aligned}
-\text{paid}_m &= D + (L - B_{m+1}), \qquad \text{paid}_m + \text{remaining}_m = L + D \\
-\text{remaining}_m &= B_{m+1} \\
-\text{cumulative}_m &= D + \sum_{k \le m} \left(T_k + \tilde S_k\right) \\
+\text{paid}_m &= D + (L_0 - L_{m+1}), \qquad \text{paid}_m + \text{remaining}_m = L_0 + D \\
+\text{remaining}_m &= L_{m+1} \\
+\text{cumulative}_m &= D + \sum_{k \le m} \left(T_k + \tilde\ell_k\right) \\
 \text{cumulative excl. avgift}_m &= \text{cumulative}_m - \sum_{k \le m} A_k
 \end{aligned}
 $$
 
-**Horizon:** $N = 12 \max(b)$, the latest end year. If a row with no end year sets a rate or avgift, the model instead runs until $B = 0$, capped at $N = 1200$ (100 years).
+**Horizon:** $N = 12 \max(b)$, the latest end year. If a row with no end year sets a rate or avgift, the model instead runs until $L_m = 0$, capped at $N = 1200$ (100 years).
 
 ## Cumulative savings
 
@@ -66,7 +66,7 @@ This section outlines the general model. The **Auto** tab implements step 4 belo
 
 Each month a surplus can either pay down the loan, which saves future interest, or be invested, which earns compound growth. Avgift is the same under every strategy, so it drops out of the comparison.
 
-**Decision variables** (months $m = 0, \dots, N-1$): extra prepayment $u_m \ge 0$ and investment $v_m \ge 0$.
+**Decision variables** (months $m = 0, \dots, N-1$): extra prepayment $0 \le u_m \le s_m$; the rest of the surplus, $s_m - u_m$, is invested.
 
 **Parameters:**
 
@@ -80,32 +80,33 @@ Each month a surplus can either pay down the loan, which saves future interest, 
 
 $$
 \begin{aligned}
-B_{m+1} &= B_m - R_m - u_m, \qquad R_m = \min\!\left(\frac{L\,p_m}{12},\; B_m\right), \qquad B_m \ge 0 \\
-P_{m+1} &= P_m\,(1+\tilde g)^{1/12} + v_m \\
-X_m &= R_m + \frac{B_m\,\tilde r}{12} + u_m + v_m
+L_{m+1} &= L_m - R_m - u_m, \qquad R_m = \min\!\left(\frac{L_0\,p_m}{12},\; L_m\right), \qquad L_m \ge 0 \\
+P_{m+1} &= P_m\,(1+\tilde g)^{1/12} + (s_m - u_m) \\
+s_m &= X_m - R_m - \frac{L_m\,\tilde r}{12} \qquad \text{(surplus after required costs)}
 \end{aligned}
 $$
 
-Once the loan is gone, $R_m = I_m = 0$ and all of $X_m$ is investable.
+Once the loan is gone, $R_m = 0$, there is no interest, and all of $X_m$ is investable.
 
-**Amortisation rule (Sweden), optional:** the required rate depends on loan-to-value $B/V$, where $V$ is the property value:
+**Amortisation rule (Sweden), optional:** the required rate depends on loan-to-value $L_m/V$, where $V$ is the property value:
 
 $$
-p(B) =
+p(L_m) =
 \begin{cases}
-2\% & B/V > 70\% \\
-1\% & 50\% < B/V \le 70\% \\
-0 & B/V \le 50\%
+2\% & L_m/V > 70\% \\
+1\% & 50\% < L_m/V \le 70\% \\
+0 & L_m/V \le 50\%
 \end{cases}
-\;+\; 1\% \cdot \mathbf{1}\!\left[\,B > 4.5 \times \text{gross income}\,\right]
 $$
 
-This couples the decisions: prepaying lowers $B/V$, which lowers $p$, which frees cash flow.
+(The extra 1% for loans above 4.5× gross income is not modelled.)
+
+This couples the decisions: prepaying lowers $L_m/V$, which lowers $p$, which frees cash flow.
 
 **Objective:** maximise terminal net worth
 
 $$
-\max_{\{u_m,\,v_m\}} \; W = P_N - B_N \quad (+\,V_N,\ \text{which no decision changes})
+\max_{\{u_m\}} \; W = P_N - L_N \quad (+\,V_N,\ \text{which no decision changes})
 $$
 
 Under uncertainty, maximise $\mathbb{E}[U(W)]$ or a chosen percentile of $W$ instead.
@@ -117,12 +118,12 @@ Under uncertainty, maximise $\mathbb{E}[U(W)]$ or a chosen percentile of $W$ ins
    \text{prepay if } \; r(1-\tau) > g - \kappa, \qquad \text{otherwise invest.}
    $$
    When the two are equal, the choice doesn't matter.
-2. **Rates that change over time (plan rows).** This is still a linear program in $(u_m, v_m)$, solvable with e.g. `scipy.optimize.linprog`. Equivalently, compare each month the growth factors from $m$ to $N$ under the time-varying rates,
+2. **Rates that change over time (plan rows).** This is still a linear program in $u_m$, solvable with e.g. `scipy.optimize.linprog`. Equivalently, compare each month the growth factors from $m$ to $N$ under the time-varying rates,
    $$
    \prod_{k=m}^{N-1}\left(1+\frac{\tilde r_k}{12}\right) \quad \text{vs.} \quad \prod_{k=m}^{N-1}(1+\tilde g_k)^{1/12},
    $$
    and choose the larger. The result is a bang-bang policy that can switch when rates change.
-3. **LTV-dependent amortisation.** The piecewise $p(B)$ breaks linearity. Use dynamic programming on the state $B$ (discretised), or search over threshold policies: "prepay until $B/V \le \theta$, then invest", with $\theta \in \{70\%, 50\%, 0\}$. Simulate each with the recursion above and keep the policy with the largest $W$.
+3. **LTV-dependent amortisation.** The piecewise $p(L_m)$ breaks linearity. Use dynamic programming on the state $L_m$ (discretised), or search over threshold policies: "prepay until $L_m/V \le \theta$, then invest", with $\theta \in \{70\%, 50\%, 0\}$. Simulate each with the recursion above and keep the policy with the largest $W$.
 4. **Uncertain returns.** $g$ is risky, while saved interest is a guaranteed return. Simulate return paths (Monte Carlo, e.g. lognormal monthly returns) and evaluate each policy from step 3 by the distribution of $W$. The risk-neutral break-even is $\tilde r = \mathbb{E}[\tilde g]$. A risk-averse investor instead compares $\tilde r$ with a certainty-equivalent return
    $$
    \tilde g_{\text{CE}} \approx \tilde g - \tfrac{1}{2}\gamma\sigma^2,
@@ -131,44 +132,106 @@ Under uncertainty, maximise $\mathbb{E}[U(W)]$ or a chosen percentile of $W$ ins
 
 ### Auto tab implementation
 
-**Market paths.** Monthly growth factors come from $n$ seeded standard normals $z_{i,m}$, the same for every strategy (common random numbers):
+The Auto tab is a Monte Carlo search over a grid of simple rule-based strategies (step 3 policies under step 4 uncertainty). Every strategy is simulated on the same $n$ random market paths, scored on risk-adjusted outcomes, and ranked by the chosen objective.
+
+**Inputs** (Auto tab label → symbol):
+
+| Input | Symbol | Input | Symbol |
+|---|---|---|---|
+| Mortgage | $L_0$ | Expected return / yr | $g$ |
+| Down payment | $D$, with $V = L_0 + D$ | Volatility / yr | $\sigma$ |
+| Interest rate / yr | $r$ | Interest deduction | $\tau$ |
+| Avgift / month | $A$ | Investment tax / yr | $\kappa$ |
+| Monthly budget | $X_0$ | Savings target | $P_\star$ (blank = none) |
+| Budget change / yr | $\Delta X$ | Horizon (years) | $N/12$ |
+| Starting savings | $P_0$ | Confidence | $c$ |
+| Savings buffer | buffer | Simulated paths | $n$ |
+
+The property value $V$ is held constant, so LTV $= L_m/V$ only falls as the loan is repaid.
+
+**Market paths.** Path $i = 1, \dots, n$ gets independent standard normals $z_{i,m}$ from a fixed seed. Every strategy reuses the same draws (common random numbers), so differences between strategies are not sampling noise. Savings grow each month by
 
 $$
-G_{i,m} = \exp\!\left(\frac{\ln(1+g)}{12} - \frac{\sigma^2}{24} + \frac{\sigma}{\sqrt{12}}\, z_{i,m}\right)(1-\kappa)^{1/12},
-\qquad \mathbb{E}\!\left[G^{12}\right] = (1+g)(1-\kappa).
+G_{i,m} = \exp\!\left(\frac{\ln(1+g)}{12} - \frac{\sigma^2}{24} + \frac{\sigma}{\sqrt{12}}\, z_{i,m}\right)(1-\kappa)^{1/12}.
 $$
 
-**Monthly step** for strategy $(\alpha, \theta, \lambda)$ on path $i$. The budget is $X_m = X\,(1+\Delta)^{\lfloor m/12 \rfloor}$, and $p$ is re-set from $p(B)$ at the start of each year:
+Log returns are normal (geometric Brownian motion, monthly steps). The $-\sigma^2/24$ term is the lognormal mean correction, so that over a year
 
 $$
-\begin{aligned}
-s_m &= X_m - R_m - \frac{B_m\, r}{12}(1-\tau) - A && \text{surplus} \\
-u_m &= \alpha\, s_m \cdot \mathbf{1}[\,s_m > 0,\ B/V > \theta\,] && \text{prepayment} \\
-v_m &= s_m - u_m && \text{invested; negative = withdrawn} \\
-P_{m+1} &= P_m\, G_{i,m} + v_m && \text{(at rate } 1 + r/12 \text{ while } P < 0\text{)}
-\end{aligned}
+\mathbb{E}\!\left[\prod_{m=1}^{12} G_{i,m}\right] = (1+g)(1-\kappa).
 $$
 
-**Yearly lump sum** (if $\lambda$ is set), at each year end: move savings above the buffer $K$ into the loan, down to LTV $\lambda$ at most:
+**What $g$ and $\sigma$ mean.** $g$ is the *mean* yearly return before tax. $\sigma$ is the standard deviation of the yearly *log* return, $\operatorname{sd}\,\ln(P_{12}/P_0)$ without contributions. For $g = 9\%$, $\sigma = 0.15$ (the defaults):
 
 $$
-\ell = \max\!\big(\min(B - \lambda V,\; P - K),\; 0\big), \qquad B \leftarrow B - \ell, \quad P \leftarrow P - \ell.
+\text{median yearly return} = (1+g)\,e^{-\sigma^2/2} - 1 \approx 7.8\%, \qquad
+\operatorname{sd}(\text{yearly return}) = (1+g)\sqrt{e^{\sigma^2} - 1} \approx 16\%.
 $$
 
-**Strategy grid:** $\alpha \in \{0, 0.1, \dots, 1\}$, $\theta \in \{70\%, 50\%, 25\%, 0\}$, $\lambda \in \{\text{none}, 70\%, 50\%, 0\}$. That gives 164 distinct strategies.
+Over many years the median path compounds at roughly $g - \sigma^2/2$, so a higher $\sigma$ lowers the pessimistic quantiles and favours prepaying (a certain return of $r(1-\tau)$). Only savings are random: $r$, $X$ and $A$ are deterministic.
 
-**Scores** per strategy, over $n$ paths, at confidence $c$:
+**Monthly step** for strategy $(\alpha, \theta, \lambda)$ on path $i$, months $m = 0, \dots, N-1$, starting from the original loan $L_0$ and savings $P_0$:
 
-- pessimistic final net worth: the $(1-c)$-quantile of $W = P_N - B_N$
-- for each goal time (savings $\ge$ target, debt-free, or both): the $c$-quantile of the first month it happens, or $\infty$ if it never does within the horizon
-- shortfall risk: the share of paths where $P < 0$ at some point
+1. *Start of each year* ($m \equiv 0 \bmod 12$): set the amortisation rate $p = p(L_m)$ from the LTV rule above, and the budget $X_m = X_0\,(1+\Delta X)^{m/12}$. Both stay fixed for the next 12 months.
+2. *Surplus* after required repayment, interest net of the deduction, and avgift:
+   $$
+   R_m = \min\!\left(\frac{L_0\,p}{12},\; L_m\right), \qquad
+   s_m = X_m - R_m - \frac{L_m\, r}{12}(1-\tau) - A.
+   $$
+3. *Split the surplus.* Prepay a share $\alpha$ while the LTV after the required repayment is above $\theta$, and invest the rest:
+   $$
+   L_m' = L_m - R_m, \qquad
+   u_m = \begin{cases} \min(\alpha\, s_m,\; L_m') & s_m > 0 \text{ and } L_m'/V > \theta \\ 0 & \text{otherwise} \end{cases}.
+   $$
+   A negative surplus gives $u_m = 0$, so $s_m < 0$ is withdrawn from savings.
+4. *Update balances:*
+   $$
+   L_{m+1} = L_m' - u_m, \qquad
+   P_{m+1} = \begin{cases} P_m\, G_{i,m} + (s_m - u_m) & P_m \ge 0 \\ P_m\,(1 + r/12) + (s_m - u_m) & P_m < 0 \end{cases}
+   $$
+   Negative savings act as a debt at the mortgage rate (no deduction). Any month with $P_{m+1} < \min(\text{buffer}, P_0)$ marks the path as a *shortfall*: savings fell below the buffer (or below the starting savings, if those are already under the buffer).
+5. *Year end* ($m + 1 \equiv 0 \bmod 12$), if $\lambda$ is set and $L_{m+1}/V > \lambda$: move savings above the buffer into the loan, down to LTV $\lambda$ at most:
+   $$
+   \ell = \max\!\big(\min(L_{m+1} - \lambda V,\; P_{m+1} - \text{buffer}),\; 0\big), \qquad L_{m+1} \leftarrow L_{m+1} - \ell, \quad P_{m+1} \leftarrow P_{m+1} - \ell.
+   $$
+6. *Record goal times* (first month $m+1$ at which each holds; $\infty$ if never within the horizon):
+   $$
+   t_F = \min\{m : L_m = 0\}, \qquad t_T = \min\{m : P_m \ge P_\star\}, \qquad t_{TF} = \min\{m : L_m = 0,\ P_m \ge P_\star\}.
+   $$
 
-**Ranking:** strategies with shortfall risk $\le 1-c$ come first. Then sort by the objective's goal time, or by pessimistic net worth for "maximise final net worth", with ties broken by pessimistic net worth. The chart also highlights the best trade-offs: strategies that no other strategy beats on both goal time and pessimistic net worth.
+After the loan is paid off, $R_m = u_m = 0$ and the whole surplus $X_m - A$ is invested. Everything is net of the interest deduction and investment tax, so the savings target and net worth are after-tax amounts.
 
-**Apply to manual** runs the selected strategy on the expected path ($G = ((1+g)(1-\kappa))^{1/12}$) and writes one row per year:
+**Strategy grid:** $\alpha \in \{0, 0.05, \dots, 1\}$, $\theta \in \{70\%, 50\%, 0\}$ (the amortisation-rule steps), $\lambda \in \{\text{none}, 70\%, 50\%, 0\}$. When $\alpha = 0$, $\theta$ has no effect and only one value is kept, giving $4 \times (1 + 20 \times 3) = 244$ strategies. The grid is fixed: the number of paths $n$ only sets how precisely each strategy is scored. For example, $(\alpha, \theta, \lambda) = (1, 0, \text{none})$ is "prepay everything until debt-free", and $(0, \cdot, \text{none})$ is "invest everything".
 
-- housing repayment rate $= \sum_\text{year}(R + u)\,/\,L$
-- savings yearly addition $= \sum_\text{year} v$, with growth rate $(1+g)(1-\kappa)-1$
+**Scores** per strategy over the $n$ paths. With $Q_q$ the empirical $q$-quantile (the $\lceil qn \rceil$-th smallest value) and $W_i = P_{i,N} - L_{i,N}$ the final net worth on path $i$ (excluding the property value, which no strategy changes):
+
+$$
+W_{\text{low}} = Q_{1-c}(W), \qquad W_{\text{med}} = Q_{0.5}(W), \qquad
+\hat t_k = Q_c(t_k) \ \ (k \in \{F, T, TF\}), \qquad
+\text{risk} = \frac{1}{n}\sum_i \mathbf{1}\big[\min_m P_{i,m} < \min(\text{buffer}, P_0)\big].
+$$
+
+So $W_{\text{low}}$ is the net worth beaten in a share $c$ of paths, and $\hat t_k$ is the time by which goal $k$ is reached in a share $c$ of paths.
+
+The confidence $c$ and the max shortfall risk $\rho_{\max}$ are not used in the simulation itself. Each strategy keeps its sorted per-path outcomes ($W_i$ and the three goal times), so changing either only re-takes these quantiles, re-checks the risk limit and re-ranks, with no re-run.
+
+**Ranking:**
+
+1. Strategies with risk above the max shortfall risk $\rho_{\max}$ (an input, default 1%) are dropped; those that miss the goal (time objectives) are dropped too.
+2. By the objective's goal time: $\hat t_{TF}$ (debt-free and savings target earliest), $\hat t_T$ (savings target earliest), $\hat t_F$ (debt-free earliest); none for "highest net worth".
+3. Ties by $W_{\text{low}}$, larger first.
+
+**Charts.**
+
+- *Corner plot:* the shown strategies (those reaching the goal within the risk limit; a line above the plot counts how many were simulated, reach the goal, are too risky and are shown). The top-ranked one is pre-selected (ringed); click any point to select another. Six variables are shown: $\alpha$, $\theta$, $\lambda$ (none drawn at 100%), shortfall risk, goal time $\hat t_k$ and $W_{\text{low}}$. The diagonal holds each variable's Gaussian kernel density estimate (Silverman's rule-of-thumb bandwidth, computed on the un-jittered values); each cell below it plots one pair. The settings take only a few values, so their points are jittered slightly.
+- *Band chart:* for the selected strategy, per month, the $1-c$, $0.5$ and $c$ quantiles across paths of savings $P_m$, loan $L_m$ and net worth $P_m - L_m$.
+
+**Apply to manual** runs the selected strategy once on the expected path ($G = ((1+g)(1-\kappa))^{1/12}$, no randomness) and writes one row per year:
+
+- housing repayment rate $= \sum_\text{year}(R + u)\,/\,L_0$
+- savings yearly addition $= \sum_\text{year} (s - u)$, with growth rate $(1+g)(1-\kappa)-1$
 - each lump sum $\ell$ as $-\ell$ in both tables
 
 Consecutive years with identical values are merged.
+
+**Not modelled:** the extra 1% amortisation for loans above 4.5× gross income; the lower 21% deduction on interest above 100k SEK/yr; changing interest rates, house prices or avgift; fat-tailed or autocorrelated returns; and the illiquidity of prepaid equity beyond the buffer rule.
