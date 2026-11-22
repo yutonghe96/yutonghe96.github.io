@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimator</title>
+<script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+<style>
+  body { font-family: sans-serif; max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+  label { display: flex; flex-direction: column; font-size: 13px; }
+  input { width: 140px; }
+  .scroll { overflow-x: auto; }
+  th { font-size: 13px; font-weight: normal; text-align: left; }
+  td input { width: 120px; }
+  html { scrollbar-gutter: stable; overflow-y: scroll; } /* scrollbar never toggles, so page width never changes */
+  .err { color: crimson; font-size: 13px; min-height: 1.3em; } /* reserve space: error text doesn't shift layout */
+  .plot { height: 450px; } /* fixed size: one chart's redraw/purge never moves the other */
+  input.bad { outline: 2px solid crimson; }
+</style>
+</head>
+<body>
+<h2>Housing payments</h2>
+<div id="housing">
+<div class="row">
+  <label>Mortgage (SEK)<input id="mortgage" type="text" inputmode="decimal" value="2.7e6"></label>
+  <label>Down payment (SEK)<input id="down" type="text" inputmode="decimal" value="3e5"></label>
+</div>
+<div class="scroll"><table>
+  <thead><tr><th>Start year</th><th>End year</th><th>Repayment rate / yr</th><th>Interest rate / yr</th><th>Avgift / month</th><th>Lump sum (SEK)</th><th></th></tr></thead>
+  <tbody id="hplan"></tbody>
+</table></div>
+<button id="hadd">+ Add row</button>
+</div>
+<div class="err" id="err-housing"></div>
+<div id="plot-housing" class="plot"></div>
+
+<h2>Cumulative savings</h2>
+<label>Base (SEK)<input id="base" type="text" inputmode="decimal" value="1.7e5"></label>
+<div class="scroll"><table>
+  <thead><tr><th>Start year</th><th>End year</th><th>Yearly addition (SEK)</th><th>Addition change / yr</th><th>Growth rate / yr</th><th></th></tr></thead>
+  <tbody id="plan"></tbody>
+</table></div>
+<button id="add">+ Add row</button>
+<div class="err" id="err-savings"></div>
+<div id="plot-savings" class="plot"></div>
+
+<script>
+// The maths is described in estimator_notes.md -- keep it in sync with monthly() and compound().
+const rnd = x => { const r = Math.round(x); return Math.abs(x % 1) === 0.5 && r % 2 ? r - 1 : r; }; // Python round()
+const hover = '%{y:,.0f}<extra></extra>';
+// Amount fields (text inputs): accept "3,000,000" and arithmetic like "12*2000"; flag and reject anything unreadable.
+function amount(id, label) {
+  const el = document.getElementById(id), v = calc(el.value);
+  el.classList.toggle('bad', Number.isNaN(v));
+  if (Number.isNaN(v)) throw new Error(`Can't read ${label} "${el.value}".`);
+  return v ?? 0;
+}
+
+// plan: [{ start, end, repay, interest, avgift, lump }], later rows override earlier ones where they overlap.
+// lump: one-off change to the loan at the year-<start> mark (end of that year's last month, like one-time savings rows),
+// added as-is to the remaining balance
+// (negative = pay off, positive = borrow more; the balance can't go below 0).
+// A row covers months (start-1)*12 .. end*12 (empty end = until the horizon); an empty cell leaves that parameter
+// unset there. Unset months carry the previous value forward; months before the first set value use that first value.
+function monthly(total, plan, months) {
+  const p = { repay: Array(months).fill(null), interest: Array(months).fill(null), avgift: Array(months).fill(null) };
+  const lump = Array(months).fill(0);
+  for (const s of plan) {
+    const st = rnd((s.start - 1) * 12);
+    const li = rnd(s.start * 12) - 1;
+    if (s.lump && li < months) lump[li] += s.lump;
+    const en = s.end === null ? months : Math.min(rnd(s.end * 12), months);
+    for (const k in p) if (s[k] !== null) for (let m = st; m < en; m++) p[k][m] = s[k];
+  }
+  for (const k in p) {
+    let last = p[k].find(v => v !== null) ?? 0;
+    p[k] = p[k].map(v => last = v ?? last);
+  }
+  const o = { repayment: [], interest: [], avgift: [], total: [], paid: [], remaining: [], lump: [] };
+  let paid = 0;
+  for (let m = 0; m < months; m++) {
+    const avgift = p.avgift[m], remain = total - paid; // repayment rate applies to the original loan
+    const rep = Math.min(total * p.repay[m] / 12, remain), int = remain * p.interest[m] / 12;
+    paid += rep;
+    const before = paid;
+    paid = total - Math.max(total - paid + lump[m], 0); // lump sum after this month's payment; next month's interest uses the new balance
+    o.lump.push(paid - before); // amount actually paid in (negative when borrowing more)
+    o.repayment.push(rep); o.interest.push(int); o.avgift.push(avgift); o.total.push(rep + int + avgift);
+    o.paid.push(paid); o.remaining.push(total - paid);
+  }
+  return o;
+}
+
+function compound(base, plan, ppy = 12) {
+  const segs = plan.map(s => { const y = [].concat(s.year); return [y[0], y[y.length - 1], s]; });
+  const n = rnd(Math.max(...segs.map(s => s[1])) * ppy), add = Array(n).fill(0), rates = Array(n).fill(null);
+  for (const [a, b, s] of segs) {
+    const amt = s.yearly_addition ?? 0, ch = s.yearly_addition_change ?? 0, r = s.yearly_growth_rate;
+    if (a === b) {
+      const i = Math.min(Math.max(rnd(b * ppy) - 1, 0), n - 1);
+      add[i] += amt; if (r != null) rates[i] = r;
+    } else {
+      const st = Math.max(rnd(Math.max(a - 1, 0) * ppy), 0), en = Math.min(rnd(b * ppy), n);
+      for (let k = 0; k < en - st; k++) { add[st + k] += amt / ppy * (1 + ch) ** (k / ppy); if (r != null) rates[st + k] = r; }
+    }
+  }
+  const o = { contributed: [], interest: [], total: [] };
+  let rate = 0, bal = base, con = base;
+  for (let i = 0; i < n; i++) {
+    if (rates[i] !== null) rate = rates[i];
+    bal += bal * ((1 + rate) ** (1 / ppy) - 1) + add[i]; con += add[i];
+    o.contributed.push(con); o.interest.push(bal - con); o.total.push(bal);
+  }
+  return o;
+}
+
+// Month count -> "4 years 8 months", "14 years", "1 year 1 month", "8 months".
+function ymLabel(m) {
+  const y = Math.floor(m / 12), mo = m % 12, p = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  return [y && p(y, 'year'), mo && p(mo, 'month')].filter(Boolean).join(' ') || '0 months';
+}
+// Monthly points are evenly spaced, so a category axis keyed by ymLabel is still linear in time; the
+// category text becomes the unified-hover title, and ticks are placed at whole years labelled as plain numbers.
+function monthAxis(n) {
+  const step = [1, 2, 5, 10, 20, 50].find(s => n / 12 / s <= 12) ?? 100, tickvals = [], ticktext = [];
+  for (let y = step; y * 12 <= n; y += step) { tickvals.push(ymLabel(y * 12)); ticktext.push(y); }
+  return { type: 'category', title: { text: 'year' }, ...(tickvals.length && { tickmode: 'array', tickvals, ticktext }) };
+}
+
+function guarded(fn, errId) { // a failure in one chart shows a message instead of breaking the page
+  return () => { try { fn(); document.getElementById(errId).textContent = ''; } catch (e) { document.getElementById(errId).textContent = e.message; } };
+}
+
+// SI label with at most 1 decimal: 2500000 -> "2.5M", 640000 -> "640k".
+const si = v => { const [d, u] = Math.abs(v) >= 1e6 ? [1e6, 'M'] : Math.abs(v) >= 1e3 ? [1e3, 'k'] : [1, '']; return +(v / d).toFixed(1) + u; };
+// Round 1/2/5×10ⁿ ticks over [0, max], each labelled "abs (pct% of total)".
+function pctTicks(max, total) {
+  const raw = max / 6, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 5, 10].map(f => f * mag).find(s => s >= raw);
+  const tickvals = []; for (let v = 0; v <= max + 1e-9; v += step) tickvals.push(v);
+  return { tickmode: 'array', tickvals, ticktext: tickvals.map(v => `${si(v)} (${Math.round(v / total * 100)}%)`) };
+}
+
+function drawHousing() {
+  const num = v => v.trim() === '' ? null : +v;
+  const plan = [...document.querySelectorAll('#hplan tr')].map(tr => tr.querySelectorAll('input')).map(([s, e, r, i, a, l], n) => {
+    const [avgift, lump] = [[a, 'avgift'], [l, 'lump sum']].map(([el, name]) => {
+      const v = calc(el.value);
+      el.classList.toggle('bad', Number.isNaN(v));
+      if (Number.isNaN(v)) throw new Error(`Row ${n + 1}: can't evaluate ${name} "${el.value}".`);
+      return v;
+    });
+    return { start: num(s.value), end: num(e.value), repay: num(r.value), interest: num(i.value), avgift, lump };
+  }).filter(s => s.start !== null && s.start > 0 && s.start <= 100 && (s.end === null || s.end >= s.start));
+  if (!plan.length) throw new Error('Add at least one row with a start year between 0 and 100 (and end year ≥ start year).');
+  // Horizon: the latest end year; if any row is open-ended, run until the mortgage is paid off (capped at 100 years).
+  const mortgage = amount('mortgage', 'mortgage'), down = amount('down', 'down payment'), value = mortgage + down;
+  if (!(value > 0)) throw new Error('Mortgage + down payment must be positive.');
+  const lastEnd = rnd(Math.max(...plan.map(s => s.end ?? s.start)) * 12);
+  // (a row with only a lump sum and no end year doesn't make the plan open-ended)
+  const open = plan.some(s => s.end === null && [s.repay, s.interest, s.avgift].some(v => v !== null));
+  let d = monthly(mortgage, plan, open ? 1200 : lastEnd);
+  if (open) {
+    const off = d.remaining.findIndex(v => v <= 1e-6), n = Math.max(lastEnd, off < 0 ? 1200 : off + 1);
+    for (const k in d) d[k] = d[k].slice(0, n);
+  }
+  d.paid = d.paid.map(v => v + down); // equity: down payment + repaid, so paid + remaining = mortgage + down payment
+  let cum = down; d.cumulative = d.total.map((v, i) => cum += v + d.lump[i]); // down payment + monthly totals + lump sums
+  let av = 0; d.cumulative_ex = d.cumulative.map((v, i) => v - (av += d.avgift[i])); // same, excluding avgift
+  const months = d.total.length;
+  const x = d.total.map((_, i) => ymLabel(i + 1));
+  const t = (k, extra) => ({ x, y: d[k], name: k, hovertemplate: hover, ...extra });
+  const bal = k => ({ yaxis: 'y2', line: { dash: 'dash' }, legendgroup: 'b', customdata: d[k].map(v => v / value),
+                      hovertemplate: '%{y:,.0f} (%{customdata:.0%})<extra></extra>' });
+  const y2max = Math.max(...d.paid, ...d.remaining, ...d.cumulative);
+  Plotly.react('plot-housing', [
+    t('repayment', { legendgroup: 'p', legendgrouptitle: { text: 'Left axis (payment)' } }),
+    t('interest', { legendgroup: 'p' }), t('avgift', { legendgroup: 'p' }), t('total', { legendgroup: 'p' }),
+    t('paid', { ...bal('paid'), legendgrouptitle: { text: 'Right axis (balance)' } }), t('remaining', bal('remaining')),
+    t('cumulative', { ...bal('cumulative'), name: 'cumulative payment', line: { dash: 'dot' } }),
+    t('cumulative_ex', { ...bal('cumulative_ex'), name: 'cumulative excl. avgift', line: { dash: 'dot' } }),
+  ], {
+    xaxis: monthAxis(months), hovermode: 'x unified',
+    yaxis: { title: { text: 'SEK / month' }, rangemode: 'tozero', tickformat: '~s' },
+    yaxis2: { title: { text: 'SEK balance (% of total)' }, overlaying: 'y', side: 'right', showgrid: false,
+              range: [0, y2max * 1.03], ...pctTicks(y2max, value) },
+    // Legend anchored to the container edge (not the plot width) and margins fixed, so the plot area never resizes.
+    legend: { groupclick: 'toggleitem', xref: 'container', x: 1, xanchor: 'right', y: 1 },
+    margin: { l: 70, r: 300, t: 20, b: 50, autoexpand: false }, uirevision: 'housing',
+  }, { responsive: true });
+}
+
+// Evaluate numbers like "3,000,000" or "2.7e6", or simple arithmetic like "12*2000" or "(5000+3000)*12".
+function calc(v) {
+  v = v.replace(/,/g, '').trim(); // commas are thousand separators
+  if (v === '') return null;
+  if (!/^(\d*\.?\d+(e[+-]?\d+)?|\d+\.|[\s+\-*/()])+$/i.test(v)) return NaN; // numbers (incl. 2.7e6), operators, parens
+  try { const r = Function(`"use strict"; return (${v});`)(); return typeof r === 'number' && isFinite(r) ? r : NaN; }
+  catch { return NaN; }
+}
+
+function drawSavings() {
+  const num = v => v.trim() === '' ? null : +v;
+  const plan = [...document.querySelectorAll('#plan tr')].map(tr => tr.querySelectorAll('input')).map(([s, e, a, c, r], i) => {
+    const start = num(s.value), end = num(e.value), add = calc(a.value);
+    a.classList.toggle('bad', Number.isNaN(add));
+    if (Number.isNaN(add)) throw new Error(`Row ${i + 1}: can't evaluate yearly addition "${a.value}".`);
+    return { year: end === null ? start : [start, end], yearly_addition: add ?? 0,
+             yearly_addition_change: num(c.value) ?? 0, yearly_growth_rate: num(r.value) };
+  }).filter(seg => [].concat(seg.year).every(y => y !== null && y > 0 && y <= 100));
+  if (!plan.length) { Plotly.purge('plot-savings'); throw new Error('Add at least one row with a start year between 0 and 100.'); }
+  const d = compound(amount('base', 'base'), plan), x = d.total.map((_, i) => ymLabel(i + 1));
+  Plotly.react('plot-savings', [
+    { x, y: d.contributed, name: 'contributed', stackgroup: 'one', hovertemplate: hover },
+    { x, y: d.interest, name: 'interest', stackgroup: 'one', hovertemplate: hover },
+    { x, y: d.total, name: 'total', line: { dash: 'dot', color: 'black' }, hovertemplate: hover },
+  ], {
+    xaxis: monthAxis(x.length), yaxis: { title: { text: 'SEK' }, tickformat: '~s' }, hovermode: 'x unified',
+    legend: { xref: 'container', x: 1, xanchor: 'right', y: 1 },
+    margin: { l: 70, r: 130, t: 20, b: 50, autoexpand: false }, uirevision: 'savings',
+  }, { responsive: true });
+}
+
+// textCols: columns that take amounts with commas/arithmetic (text inputs); the rest are number inputs.
+function addRow(tbody, textCols, values = Array(document.getElementById(tbody).closest('table').querySelectorAll('th').length - 1).fill('')) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = values.map((v, i) => `<td><input ${textCols.includes(i) ? 'type="text" inputmode="decimal"' : 'type="number"'} value="${v}"></td>`).join('') + '<td><button title="Remove row">×</button></td>';
+  document.getElementById(tbody).append(tr);
+}
+const removeRow = redraw => e => { if (e.target.tagName === 'BUTTON') { e.target.closest('tr').remove(); redraw(); } };
+
+const housing = guarded(drawHousing, 'err-housing'), savings = guarded(drawSavings, 'err-savings');
+document.getElementById('housing').addEventListener('input', housing);
+document.getElementById('base').addEventListener('input', savings);
+document.getElementById('plan').addEventListener('input', savings);
+document.getElementById('hplan').addEventListener('click', removeRow(housing));
+document.getElementById('plan').addEventListener('click', removeRow(savings));
+document.getElementById('hadd').addEventListener('click', () => { addRow('hplan', [4, 5]); housing(); });
+document.getElementById('add').addEventListener('click', () => { addRow('plan', [2]); savings(); });
+addRow('hplan', [4, 5], [1, 30, 0.02, 0.03, '6,000', '']);
+addRow('plan', [2], [1, 30, '12*12000', 0.01, 0.09]);
+housing(); savings();
+</script>
+</body>
+</html>
