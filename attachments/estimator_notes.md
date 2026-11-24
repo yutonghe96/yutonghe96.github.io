@@ -25,7 +25,7 @@ $$
 
 **Lump sum:** $\ell_m$ is nonzero only in month $m = 12a$, the end of the row's start year $a$. It is applied after that month's payment, so the next month's interest uses the new balance. $\ell < 0$ pays the loan down and $\ell > 0$ borrows more. The amount actually applied is $\tilde\ell_m = L_m - R_m - L_{m+1}$, which is capped by the remaining balance.
 
-**Plotted (right axis):** every value is also shown as a percentage of $L_0 + D$.
+**Plotted (balance chart, below the payments chart):** every value is also shown as a percentage of $L_0 + D$.
 
 $$
 \begin{aligned}
@@ -141,6 +141,7 @@ The Auto tab is a Monte Carlo search over a grid of simple rule-based strategies
 | Mortgage | $L_0$ | Expected return / yr | $g$ |
 | Down payment | $D$, with $V = L_0 + D$ | Volatility / yr | $\sigma$ |
 | Interest rate / yr | $r$ | Investment tax / yr | $\kappa$ |
+| Rate volatility / yr | $\sigma_r$ | | |
 | Avgift / month | $A$ | | |
 | Monthly budget | $X_0$ | | |
 | Budget change / yr | $\Delta X$ | Horizon (years) | $N/12$ |
@@ -170,29 +171,43 @@ $$
 \operatorname{sd}(\text{yearly return}) = (1+g)\sqrt{e^{\sigma^2} - 1} \approx 16\%.
 $$
 
-Over many years the median path compounds at roughly $g - \sigma^2/2$, so a higher $\sigma$ lowers the pessimistic quantiles and favours prepaying (a certain return of $r(1-\tau)$). Only savings are random: $r$, $X$ and $A$ are deterministic.
+Over many years the median path compounds at roughly $g - \sigma^2/2$, so a higher $\sigma$ lowers the pessimistic quantiles and favours prepaying (a certain return of $r(1-\tau)$). Savings returns and the mortgage rate are random; $X$ and $A$ are deterministic.
+
+**Rate paths.** The mortgage rate is re-set once a year (like the amortisation rate), from separate standard normals $z'_{i,y}$ with their own fixed seed, again shared by all strategies. Year 1 uses the input rate $r_0$; later years follow a mean-reverting AR(1), floored at 0:
+
+$$
+x_{i,0} = r_0, \qquad
+x_{i,y} = r_0 + \phi\,(x_{i,y-1} - r_0) + \sigma_r\, z'_{i,y}, \qquad
+r_{i,y} = \max(x_{i,y},\ 0), \qquad \phi = 0.5.
+$$
+
+$\sigma_r$ is in rate units: 0.01 ≈ ±1 percentage point a year, so from $r_0 = 3\%$ the next year's rate is typically 2–4%, and in the long run about two years in three lie within $3\% \pm 1.15\% = 1.85$–$4.15\%$ (and 90% of paths within about 1.1–4.9% by year 10). With $\phi = 0.5$ a deviation halves each year, the year-to-year change has sd $\sigma_r\sqrt{2/(1+\phi)} \approx 1.15\,\sigma_r$, and the long-run spread of the rate around $r_0$ is $\sigma_r/\sqrt{1-\phi^2} \approx 1.15\,\sigma_r$.
+
+*Default $\sigma_r = 0.01$.* Average variable rates on new Swedish mortgages (SCB, since 2005) ran from about 3% in 2005 to about 5.5% in late 2008, fell to about 2% in 2009, rose to about 4% in 2011, stayed near 1.4–1.6% from 2015 to 2021 (low 1.38% in November 2021), jumped to about 4.5–5% in 2023 and fell back to 3.45% by December 2024 and under 3% in mid-2025. Over these years both the yearly change and the spread around the mean are roughly 1.2 percentage points, which $\sigma_r = 0.01$ with $\phi = 0.5$ reproduces. The yearly path values are approximate, read from SCB releases, not a fitted series. Rates are assumed independent of market returns (in practice rate rises have often come with weak markets, which would make prepaying look somewhat better).
 
 **Monthly step** for strategy $(\alpha, \theta, \lambda)$ on path $i$, months $m = 0, \dots, N-1$, starting from the original loan $L_0$ and savings $P_0$:
 
-1. *Start of each year* ($m \equiv 0 \bmod 12$): set the amortisation rate $p = p(L_m)$ from the LTV rule above, and the budget $X_m = X_0\,(1+\Delta X)^{m/12}$. Both stay fixed for the next 12 months.
+1. *Start of each year* ($m \equiv 0 \bmod 12$): set the amortisation rate $p = p(L_m)$ from the LTV rule above, the budget $X_m = X_0\,(1+\Delta X)^{m/12}$ and the mortgage rate $r_{i,y}$ from the rate path. All three stay fixed for the next 12 months.
 2. *Surplus* after required repayment, full interest, and avgift (the deduction comes back at year end, step 5):
    $$
    R_m = \min\!\left(\frac{L_0\,p}{12},\; L_m\right), \qquad
-   s_m = X_m - R_m - \frac{L_m\, r}{12} - A.
+   s_m = X_m - R_m - \frac{L_m\, r_{i,y}}{12} - A,
    $$
-3. *Split the surplus.* Prepay a share $\alpha$ while the LTV after the required repayment is above $\theta$, and invest the rest:
+   where $y = \lfloor m/12 \rfloor$ is the year of month $m$ and $r_{i,y}$ that year's rate on path $i$ (the rate $r$ in step 4 below is also $r_{i,y}$).
+3. *Split the surplus.* The minimum payments in step 2 always come first. If savings after this month's growth are below the buffer, the surplus first refills them up to it; of what is left, $f_m$, prepay a share $\alpha$ while the LTV after the required repayment is above $\theta$, and invest the rest:
    $$
+   f_m = s_m - \min\!\big(\max(s_m, 0),\; \max(\text{buffer} - P_m G_{i,m},\, 0)\big), \qquad
    L_m' = L_m - R_m, \qquad
-   u_m = \begin{cases} \min(\alpha\, s_m,\; L_m') & s_m > 0 \text{ and } L_m'/V > \theta \\ 0 & \text{otherwise} \end{cases}.
+   u_m = \begin{cases} \min(\alpha\, f_m,\; L_m') & f_m > 0 \text{ and } L_m'/V > \theta \\ 0 & \text{otherwise} \end{cases}.
    $$
-   A negative surplus gives $u_m = 0$, so $s_m < 0$ is withdrawn from savings.
+   ($G_{i,m}$ is replaced by $1 + r/12$ when $P_m < 0$, as in step 4.) A negative surplus gives $u_m = 0$, so $s_m < 0$ is withdrawn from savings.
 4. *Update balances:*
    $$
    L_{m+1} = L_m' - u_m, \qquad
    P_{m+1} = \begin{cases} P_m\, G_{i,m} + (s_m - u_m) & P_m \ge 0 \\ P_m\,(1 + r/12) + (s_m - u_m) & P_m < 0 \end{cases}
    $$
-   Negative savings act as a debt at the mortgage rate (no deduction). Any month with $P_{m+1} < \min(\text{buffer}, P_0)$ marks the path as a *shortfall*: savings fell below the buffer (or below the starting savings, if those are already under the buffer).
-5. *Year end* ($m + 1 \equiv 0 \bmod 12$, or the last month): refund the interest deduction on that year's interest $I_y = \sum_{m \in y} L_m r/12$ into savings,
+   Negative savings act as a debt at the mortgage rate (no deduction). The lowest $P_{m+1}$ over the path is recorded as $P_{\min,i}$.
+5. *Year end* ($m + 1 \equiv 0 \bmod 12$, or the last month): refund the interest deduction on that year's interest $I_y = \sum_{m \in y} L_m r_{i,y}/12$ into savings,
    $$
    D_y = \tau \min(I_y,\ 100\text{k}) + \tau_2 \max(I_y - 100\text{k},\ 0), \qquad P_{m+1} \leftarrow P_{m+1} + D_y.
    $$
@@ -214,25 +229,28 @@ After the loan is paid off, $R_m = u_m = 0$ and the whole surplus $X_m - A$ is i
 $$
 W_{\text{low}} = Q_{1-c}(W), \qquad W_{\text{med}} = Q_{0.5}(W), \qquad
 t_f = Q_c(t), \qquad
-\rho = \frac{1}{n}\sum_i \mathbf{1}\big[\min_m P_{i,m} < \min(\text{buffer}, P_0)\big].
+P_{\text{low}} = Q_{1-c}(P_{\min}), \qquad P_{\min,i} = \min_m P_{i,m}.
 $$
 
-So $W_{\text{low}}$ is the net worth beaten in a share $c$ of paths, and $t_f$ is the time by which the loan is paid off in a share $c$ of paths.
+So $W_{\text{low}}$ is the net worth beaten in a share $c$ of paths, $t_f$ is the time by which the loan is paid off in a share $c$ of paths, and $P_{\text{low}}$ is the lowest savings that a share $c$ of paths never go under.
 
-The confidence $c$ and the max shortfall risk $\rho_{\max}$ are not used in the simulation itself. Each strategy keeps its sorted per-path outcomes ($W_i$ and $t$), so changing either only re-takes these quantiles, re-checks the risk limit and redraws, with no re-run.
+*Why lowest savings rather than a shortfall probability.* Since the surplus refills savings up to the buffer before anything is prepaid (step 3), savings only stay below the buffer if a month's market loss exceeds that month's surplus or the budget can't cover housing costs. With typical inputs the probability of breaking the buffer is about 0 for every strategy, so it no longer tells strategies apart. What does differ is how much cash a strategy keeps: investing leaves savings well above the buffer, while prepaying and lump sums hold them near it. $P_{\text{low}}$ measures that.
+
+The confidence $c$ is not used in the simulation itself. Each strategy keeps its sorted per-path outcomes ($W_i$, $t$ and $P_{\min,i}$), so changing it only re-takes these quantiles and redraws, with no re-run.
 
 **Filtering and default selection:**
 
-1. Strategies with shortfall risk $\rho$ above the max $\rho_{\max}$ (an input, default 1%) are hidden. Nothing else is filtered: a strategy not debt-free within the horizon just has no point on the debt-free axis.
+1. All strategies are shown; nothing is filtered. A strategy not debt-free within the horizon just has no point on the debt-free axis.
 2. The shown strategy with the largest $W_{\text{low}}$ is pre-selected; the choice among the rest is yours, from the corner plot.
 
 **Charts.**
 
-- *Corner plot:* the shown strategies (those within the risk limit; a line above the plot counts how many were simulated, are too risky and are shown). The pre-selected one is ringed; click any point to select another. Seven variables are shown: $\alpha$, $\theta$, $\lambda$ (none drawn at 100%), shortfall risk $\rho$, $t_f$, $W_{\text{med}}$ and $W_{\text{low}}$. The diagonal holds each variable's distribution across the shown strategies: a histogram of the share at each level for $\theta$ and $\lambda$ (titled Mo = mode, the most common level), and a Gaussian kernel density estimate for the rest (Silverman's rule-of-thumb bandwidth, computed on the un-jittered values; titled Mo = mode, the density's peak, clamped to the data range, and $\sigma$ = the standard deviation). Each cell below it plots one pair. The settings take only a few values, so their points are jittered slightly.
+- *Corner plot:* every strategy. The pre-selected one is ringed; click any point to select another. Seven variables are shown: $\alpha$, $\theta$, $\lambda$ (none drawn at 100%), lowest savings $P_{\text{low}}$, $t_f$, $W_{\text{med}}$ and $W_{\text{low}}$. The diagonal holds each variable's distribution across the shown strategies: a histogram of the share at each level for $\theta$ and $\lambda$ (titled Mo = mode, the most common level), and a Gaussian kernel density estimate for the rest (Silverman's rule-of-thumb bandwidth, computed on the un-jittered values; titled Mo = mode, the density's peak, clamped to the data range, and $\sigma$ = the standard deviation). Each cell below it plots one pair. The settings take only a few values, so their points are jittered slightly.
 - *All strategies:* each shown strategy's median (across paths) savings $P$, loan $L$ and net worth $P - L$ at the start and at the end of every month, one faint line per strategy, with the selected strategy drawn bold. Medians use quickselect rather than a full sort, which keeps the extra cost of the grid run under a second. The medians are taken per month and per quantity, so the net-worth line is not the savings median minus the loan median. They are computed during the grid run. Click a line to select that strategy.
+- *Summary:* for the selected strategy, $W_{\text{med}}$ and $W_{\text{low}}$; the debt-free time as one value if every path agrees, otherwise its median with the $1-c$ to $c$ band; and the lowest savings as median $Q_{0.5}(P_{\min})$ and $P_{\text{low}}$.
 - *Band chart:* for the selected strategy, per month, the $1-c$, $0.5$ and $c$ quantiles across paths of savings $P_m$, loan $L_m$ and net worth $P_m - L_m$.
 
-**Apply to manual** runs the selected strategy once on the expected path ($G = ((1+g)(1-\kappa))^{1/12}$, no randomness) and writes one row per year:
+**Apply to manual** runs the selected strategy once on the expected path ($G = ((1+g)(1-\kappa))^{1/12}$ and the fixed rate $r_0$, no randomness) and writes one row per year:
 
 - housing repayment rate $= \sum_\text{year}(R + u)\,/\,L_0$
 - savings yearly addition $= \sum_\text{year} (s - u)$, with growth rate $(1+g)(1-\kappa)-1$
@@ -240,4 +258,4 @@ The confidence $c$ and the max shortfall risk $\rho_{\max}$ are not used in the 
 
 Consecutive years with identical values are merged.
 
-**Not modelled:** the extra 1% amortisation for loans above 4.5× gross income; changing interest rates, house prices or avgift; fat-tailed or autocorrelated returns; and the illiquidity of prepaid equity beyond the buffer rule.
+**Not modelled:** the extra 1% amortisation for loans above 4.5× gross income; a link between interest rates and market returns; changing house prices or avgift; fat-tailed or autocorrelated returns; and the illiquidity of prepaid equity beyond the buffer rule.
