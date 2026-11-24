@@ -140,13 +140,14 @@ The Auto tab is a Monte Carlo search over a grid of simple rule-based strategies
 |---|---|---|---|
 | Mortgage | $L_0$ | Expected return / yr | $g$ |
 | Down payment | $D$, with $V = L_0 + D$ | Volatility / yr | $\sigma$ |
-| Interest rate / yr | $r$ | Interest deduction | $\tau$ |
-| | | Deduction above 100k | $\tau_2$ |
-| Avgift / month | $A$ | Investment tax / yr | $\kappa$ |
+| Interest rate / yr | $r$ | Investment tax / yr | $\kappa$ |
+| Avgift / month | $A$ | | |
 | Monthly budget | $X_0$ | | |
 | Budget change / yr | $\Delta X$ | Horizon (years) | $N/12$ |
 | Starting savings | $P_0$ | Confidence | $c$ |
 | Savings buffer | buffer | Simulated paths | $n$ |
+
+$\tau = 30\%$ and $\tau_2 = 21\%$ are fixed by Swedish tax rules (like the 70/50 % amortisation thresholds), so they are not inputs.
 
 The property value $V$ is held constant, so LTV $= L_m/V$ only falls as the loan is repaid.
 
@@ -201,7 +202,7 @@ Over many years the median path compounds at roughly $g - \sigma^2/2$, so a high
    $$
 6. *Record the debt-free time* (first month $m+1$ with no loan left; $\infty$ if never within the horizon):
    $$
-   t_F = \min\{m : L_m = 0\}.
+   t = \min\{m : L_m = 0\}.
    $$
 
 After the loan is paid off, $R_m = u_m = 0$ and the whole surplus $X_m - A$ is invested. Everything is net of the interest deduction and investment tax, so net worth is an after-tax amount.
@@ -212,22 +213,23 @@ After the loan is paid off, $R_m = u_m = 0$ and the whole surplus $X_m - A$ is i
 
 $$
 W_{\text{low}} = Q_{1-c}(W), \qquad W_{\text{med}} = Q_{0.5}(W), \qquad
-\hat t_F = Q_c(t_F), \qquad
-\text{risk} = \frac{1}{n}\sum_i \mathbf{1}\big[\min_m P_{i,m} < \min(\text{buffer}, P_0)\big].
+t_f = Q_c(t), \qquad
+\rho = \frac{1}{n}\sum_i \mathbf{1}\big[\min_m P_{i,m} < \min(\text{buffer}, P_0)\big].
 $$
 
-So $W_{\text{low}}$ is the net worth beaten in a share $c$ of paths, and $\hat t_F$ is the time by which the loan is paid off in a share $c$ of paths.
+So $W_{\text{low}}$ is the net worth beaten in a share $c$ of paths, and $t_f$ is the time by which the loan is paid off in a share $c$ of paths.
 
-The confidence $c$ and the max shortfall risk $\rho_{\max}$ are not used in the simulation itself. Each strategy keeps its sorted per-path outcomes ($W_i$ and $t_F$), so changing either only re-takes these quantiles, re-checks the risk limit and redraws, with no re-run.
+The confidence $c$ and the max shortfall risk $\rho_{\max}$ are not used in the simulation itself. Each strategy keeps its sorted per-path outcomes ($W_i$ and $t$), so changing either only re-takes these quantiles, re-checks the risk limit and redraws, with no re-run.
 
 **Filtering and default selection:**
 
-1. Strategies with risk above the max shortfall risk $\rho_{\max}$ (an input, default 1%) are hidden. Nothing else is filtered: a strategy not debt-free within the horizon just has no point on the debt-free axis.
+1. Strategies with shortfall risk $\rho$ above the max $\rho_{\max}$ (an input, default 1%) are hidden. Nothing else is filtered: a strategy not debt-free within the horizon just has no point on the debt-free axis.
 2. The shown strategy with the largest $W_{\text{low}}$ is pre-selected; the choice among the rest is yours, from the corner plot.
 
 **Charts.**
 
-- *Corner plot:* the shown strategies (those within the risk limit; a line above the plot counts how many were simulated, are too risky and are shown). The pre-selected one is ringed; click any point to select another. Seven variables are shown: $\alpha$, $\theta$, $\lambda$ (none drawn at 100%), shortfall risk, $\hat t_F$, $W_{\text{med}}$ and $W_{\text{low}}$. The diagonal holds each variable's distribution across the shown strategies: a histogram of the share at each level for $\theta$ and $\lambda$ (titled max = the most common level), and a Gaussian kernel density estimate for the rest (Silverman's rule-of-thumb bandwidth, computed on the un-jittered values; titled max = the density's peak, clamped to the data range, and $\sigma$ = the standard deviation). Each cell below it plots one pair. The settings take only a few values, so their points are jittered slightly.
+- *Corner plot:* the shown strategies (those within the risk limit; a line above the plot counts how many were simulated, are too risky and are shown). The pre-selected one is ringed; click any point to select another. Seven variables are shown: $\alpha$, $\theta$, $\lambda$ (none drawn at 100%), shortfall risk $\rho$, $t_f$, $W_{\text{med}}$ and $W_{\text{low}}$. The diagonal holds each variable's distribution across the shown strategies: a histogram of the share at each level for $\theta$ and $\lambda$ (titled Mo = mode, the most common level), and a Gaussian kernel density estimate for the rest (Silverman's rule-of-thumb bandwidth, computed on the un-jittered values; titled Mo = mode, the density's peak, clamped to the data range, and $\sigma$ = the standard deviation). Each cell below it plots one pair. The settings take only a few values, so their points are jittered slightly.
+- *All strategies:* each shown strategy's median (across paths) savings $P$, loan $L$ and net worth $P - L$ at the start and at the end of every month, one faint line per strategy, with the selected strategy drawn bold. Medians use quickselect rather than a full sort, which keeps the extra cost of the grid run under a second. The medians are taken per month and per quantity, so the net-worth line is not the savings median minus the loan median. They are computed during the grid run. Click a line to select that strategy.
 - *Band chart:* for the selected strategy, per month, the $1-c$, $0.5$ and $c$ quantiles across paths of savings $P_m$, loan $L_m$ and net worth $P_m - L_m$.
 
 **Apply to manual** runs the selected strategy once on the expected path ($G = ((1+g)(1-\kappa))^{1/12}$, no randomness) and writes one row per year:
