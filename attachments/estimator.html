@@ -21,13 +21,15 @@
   .err { color: crimson; font-size: 13px; min-height: 1.3em; } /* reserve space: error text doesn't shift layout */
   .plot { height: 450px; } /* fixed size: one chart's redraw/purge never moves the other */
   .plot.corner { height: 900px; }
-  @media (max-width: 700px) { .plot { height: 560px; } .plot.corner { height: 720px; } } /* phones: extra room for the legend above the chart */
+  @media (max-width: 700px) { .plot { height: 560px; } .plot.corner { width: 820px; height: 820px; } } /* phones: extra room for the legend above the chart; the corner plot keeps a readable size and scrolls sideways */
   input.bad { outline: 2px solid crimson; }
   .tabs { display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid #ccc; }
   .tabs button { padding: 6px 16px; border: 1px solid #ccc; border-bottom: none; background: #f4f4f4; cursor: pointer; font-size: 14px; }
   .tabs button.active { background: #fff; font-weight: bold; margin-bottom: -1px; padding-bottom: 7px; }
   h3 { font-size: 14px; margin: 14px 0 6px; }
   select { width: 230px; }
+  #err-auto { min-height: 0; } /* no reserved line, so Grid setup → Filter spacing matches the other sections */
+  .run { align-self: flex-end; } /* Run button lines up with the bottom of the inputs beside it */
   #auto-summary { font-size: 14px; line-height: 1.5; min-height: 3em; }
   #auto-summary b { font-weight: 600; }
   .info { font-size: 14px; line-height: 1.55; max-width: 760px; }
@@ -40,48 +42,69 @@
 <div class="tabs"><button data-tab="info" class="active">Info</button><button data-tab="auto">Auto</button><button data-tab="manual">Manual</button></div>
 
 <div id="tab-info" class="info">
-<h2>What this does</h2>
+<h2>Intro</h2>
 <p>Splits monthly spare cash between paying down a Swedish mortgage and investing.
-<b>Auto</b> finds a good split by Monte Carlo simulation; <b>Manual</b> lays out a plan year by year
+<b>Auto</b> finds a good split by grid simulation; <b>Manual</b> lays out a plan year by year
 ("Apply to manual" fills it from an Auto result).</p>
 
-<h2>Auto: the model (month \(m = 1 \dots N\))</h2>
+<h2>Model</h2>
 <h3>1. Surplus</h3>
-<p>Budget minus required repayment, after-deduction interest and avgift:</p>
-$$s_m = X_m - R_m - L_m\,\tfrac{r}{12}(1-\tau) - A,\qquad X_m = X_0\,(1+\Delta X)^{\lfloor m/12\rfloor}$$
+<p>Budget minus required repayment, interest and avgift:</p>
+$$s_m = X_m - R_m - L_m\,\tfrac{r}{12} - A \tag{1}$$
+$$X_m = X_0\,(1+\Delta X)^{\lfloor m/12\rfloor} \tag{2}$$
 <p class="def">\(s_m\) surplus · \(X_m\) monthly budget (\(X_0\) at start), \(\Delta X\) its yearly change · \(L_m\) remaining loan
-(\(L_0\) original) · \(r\) interest rate / yr · \(\tau\) interest deduction · \(A\) avgift / month · \(R_m\) required repayment (below).</p>
+(\(L_0\) original) · \(r\) interest rate / yr · \(A\) avgift / month · \(R_m\) required repayment (3).</p>
 <h3>2. Required repayment (Swedish rule)</h3>
-$$R_m = \min\!\big(p\,L_0/12,\;L_m\big),\qquad p = \begin{cases}2\% & L_m/V > 70\%\\ 1\% & L_m/V > 50\%\\ 0 & \text{otherwise}\end{cases}$$
+$$R_m = \min\!\big(p\,L_0/12,\;L_m\big) \tag{3}$$
+$$p = \begin{cases}2\% & L_m/V > 70\%\\ 1\% & L_m/V > 50\%\\ 0 & \text{otherwise}\end{cases} \tag{4}$$
 <p class="def">\(p\) required repayment rate / yr, re-set yearly · \(V\) property value (\(L_0\) + down payment), so
 \(L_m/V\) is the loan-to-value (LTV).</p>
+<p>\(R_m\) is the minimum: by (4) it steps down from 2 % to 1 % to 0 as the LTV falls, and anything paid beyond it (\(u_m\) in (5), \(\ell\) in (9)) is voluntary.</p>
 <h3>3. Strategy: prepay share \(\alpha\) while LTV &gt; \(\theta\), invest the rest</h3>
-$$u_m = \begin{cases}\min(\alpha\, s_m,\;L_m - R_m) & s_m > 0,\ (L_m - R_m)/V > \theta\\ 0 & \text{otherwise}\end{cases}$$
-$$L_{m+1} = L_m - R_m - u_m,\qquad P_{m+1} = P_m\,G_m + (s_m - u_m)$$
+$$u_m = \begin{cases}\min(\alpha\, s_m,\;L_m - R_m) & s_m > 0,\ (L_m - R_m)/V > \theta\\ 0 & \text{otherwise}\end{cases} \tag{5}$$
+$$L_{m+1} = L_m - R_m - u_m \tag{6}$$
+$$P_{m+1} = P_m\,G_m + (s_m - u_m) \tag{7}$$
 <p class="def">\(\alpha\) share of surplus prepaid · \(\theta\) LTV at which prepaying stops · \(u_m\) prepaid
-(the rest, \(s_m - u_m\), is invested) · \(P_m\) savings · \(G_m\) monthly growth factor of savings (step 4).</p>
-<p>A negative surplus is withdrawn from savings; negative savings accrue the mortgage rate.
+(the rest, \(s_m - u_m\), is invested) · \(P_m\) savings · \(G_m\) monthly growth factor of savings (10).</p>
+<p>A negative surplus \(s_m\) (1) is withdrawn from savings in (7); negative savings accrue the mortgage rate instead of \(G_m\).
+At each year end the interest deduction on that year's interest \(I_y = \sum_{m \in y} L_m\,r/12\) is refunded into savings:</p>
+$$D_y = \tau\,\min(I_y,\,100\text{k}) + \tau_2\,\max(I_y - 100\text{k},\,0) \tag{8}$$
+<p class="def">\(\tau\) interest deduction (30 %) · \(\tau_2\) deduction on interest above 100k SEK / yr (21 %).</p>
+<p>
 Optional year-end lump sum down to LTV \(\lambda\), keeping the buffer:</p>
-$$\ell = \max\!\big(0,\ \min(L_m - \lambda V,\; P_m - \text{buffer})\big)$$
+$$\ell = \max\!\big(0,\ \min(L_m - \lambda V,\; P_m - \text{buffer})\big) \tag{9}$$
 <p class="def">\(\ell\) lump sum moved from savings to the loan · \(\lambda\) target LTV · buffer: savings always kept.</p>
+<p>\(\theta\) and \(\lambda\) are separate rules on the same loan: \(\theta\) limits prepaying from each month's surplus (5), \(\lambda\) moves accumulated savings once a year (9),
+after the deduction refund (8). Because \(\lambda\) uses savings, which depend on the market path, the debt-free time varies across paths only when \(\lambda\) is set.</p>
 <h3>4. Market returns</h3>
-$$G_m = \exp\!\Big(\tfrac{\ln(1+g)}{12} - \tfrac{\sigma^2}{24} + \tfrac{\sigma}{\sqrt{12}}\, z_m\Big)\,(1-\kappa)^{1/12},\qquad z_m \sim \mathcal N(0,1)$$
+$$G_m = \exp\!\Big(\tfrac{\ln(1+g)}{12} - \tfrac{\sigma^2}{24} + \tfrac{\sigma}{\sqrt{12}}\, z_m\Big)\,(1-\kappa)^{1/12} \tag{10}$$
 <p class="def">\(g\) expected return / yr · \(\sigma\) volatility / yr · \(\kappa\) investment tax / yr ·
-\(z_m\) independent standard normal draw.</p>
-<p>The \(-\sigma^2/24\) term makes \(\mathbb E[G_m] = \big((1+g)(1-\kappa)\big)^{1/12}\): \(g\) is the mean yearly return, \(\sigma\) the
+\(z_m \sim \mathcal N(0,1)\) independent standard normal draw.</p>
+<p>The \(-\sigma^2/24\) term in (10) makes \(\mathbb E[G_m] = \big((1+g)(1-\kappa)\big)^{1/12}\): \(g\) is the mean yearly return, \(\sigma\) the
 std. dev. of the yearly log return (0.15 ≈ ±15 %/yr; median return ≈ \(g - \sigma^2/2\)); \(\kappa\) is an ISK-style tax on the balance.
 All strategies share the same paths (fixed seed).</p>
-<h3>5. Monte Carlo grid</h3>
-<p>The model draws many random return paths (step 4) and runs
-steps 1–3 on each path monthly. Each strategy then yields a distribution of outcomes across paths (net worth, goal
-times, shortfalls), which step 6 summarises by quantiles. A fixed grid of 244 strategies is sampled: \(\alpha \in \{0, 0.05, \dots, 1\}\), \(\theta \in \{70, 50, 0\}\%\), \(\lambda \in \{\text{none}, 70, 50, 0\}\%\).</p>
-<h3>6. Scoring (confidence \(c\), over all paths)</h3>
-$$W = P_N - L_N,\qquad W_{\text{low}} = Q_{1-c}(W),\qquad t_{\text{goal}} = Q_{c}(t),\qquad \text{risk} = \Pr\big(\min_m P_m < \text{buffer}\big)$$
+<h3>5. Simulation grid</h3>
+<p>The model draws many random return paths (10) and runs
+(1)–(9) on each path monthly. Each strategy then yields a distribution of outcomes across paths (net worth, debt-free
+times, shortfalls), which (11)–(15) summarise by quantiles. A fixed grid of 244 strategies is sampled: \(\alpha \in \{0, 0.05, \dots, 1\}\), \(\theta \in \{70, 50, 0\}\%\), \(\lambda \in \{\text{none}, 70, 50, 0\}\%\).</p>
+<h3>6. Outcome statistics</h3>
+$$W = P_N - L_N \tag{11}$$
+$$W_{\text{med}} = Q_{0.5}(W) \tag{12}$$
+$$W_{\text{low}} = Q_{1-c}(W) \tag{13}$$
+$$\hat t_F = Q_{c}(t) \tag{14}$$
+$$\text{risk} = \Pr\big(\min_m P_m < \text{buffer}\big) \tag{15}$$
 <p class="def">\(N\) horizon in months · \(W\) final net worth · \(c\) confidence · \(Q_q\) the \(q\)-quantile across simulated paths ·
-\(W_{\text{low}}\) pessimistic net worth · \(t\) months until a goal · risk: share of paths where savings ever fall below the buffer (or below \(P_0\), if that starts lower).</p>
-<p>\(t\) is the first month debt-free / \(P_m \ge\) savings target / both (after deduction and tax). Strategies with risk above the max shortfall risk (default 1%) are excluded; the rest are ranked by the objective, then by \(W_{\text{low}}\). Confidence and max risk only enter here, after the simulation,
-so changing them re-scores the stored results instantly without re-running.</p>
-<p>Not modelled: the 4.5× income amortisation add-on, the 21 % deduction above 100k SEK interest, variable interest rates.
+\(W_{\text{med}}\) median ("med") and \(W_{\text{low}}\) pessimistic ("low 1%" at \(c\) = 99%) net worth · \(t\) first month debt-free · risk: share of paths where savings ever fall below the buffer (or below \(P_0\), if that starts lower).</p>
+<p>Strategies with risk (15) above the max shortfall risk (default 1%) are hidden; nothing else is filtered. Confidence and max risk (the Filter section) only enter here, after the simulation,
+so changing them recomputes these statistics from the stored results instantly, without re-running. Horizon and paths (Grid setup) need a re-run.</p>
+<h3>7. Display</h3>
+<p><b>Corner plot</b>: one point per shown strategy, over \(\alpha\), \(\theta\), \(\lambda\), shortfall risk (15), years to debt-free (14), \(W_{\text{med}}\) (12) and \(W_{\text{low}}\) (13).
+The diagonal shows each variable's distribution across strategies: a histogram for \(\theta\) and \(\lambda\) (titled max = most common level),
+a kernel density for the rest (titled max = the curve's peak, and σ = standard deviation). A strategy never debt-free within the horizon has no point on that axis.
+The highest \(W_{\text{low}}\) (13) is selected by default; click any point to inspect another.</p>
+<p><b>Summary and band chart</b> (selected strategy): final net worth as med and low; debt-free time as one value if every path agrees,
+otherwise med with the \(1-c\) to \(c\) band. The chart shows savings, loan and net worth per month: the med line and the \(1-c\) to \(c\) band.</p>
+<p>Not modelled: the 4.5× income amortisation add-on, variable interest rates.
 Full notes: <a href="estimator_notes.md">estimator_notes.md</a>.</p>
 </div>
 
@@ -113,7 +136,7 @@ Full notes: <a href="estimator_notes.md">estimator_notes.md</a>.</p>
 </div>
 
 <div id="tab-auto" hidden>
-<h2>Strategy search</h2>
+<h2>Simulator</h2>
 <div id="auto-inputs">
 <h3>Loan &amp; housing costs (SEK)</h3>
 <div class="row">
@@ -125,37 +148,34 @@ Full notes: <a href="estimator_notes.md">estimator_notes.md</a>.</p>
 <h3>Monthly budget &amp; savings (SEK)</h3>
 <div class="row">
   <label>Amount<input id="a-X" type="text" inputmode="decimal" value="35,000"></label>
-  <label>Change / yr<input id="a-dX" type="text" inputmode="decimal" value="0.01"></label>
+  <label>Change / yr<input id="a-dX" type="text" inputmode="decimal" value="0.00"></label>
   <label>Initial savings<input id="a-P0" type="text" inputmode="decimal" value="1.7e5"></label>
   <label>Savings buffer<input id="a-buf" type="text" inputmode="decimal" value="100,000"></label>
 </div>
-<h3>Market &amp; tax</h3>
+<h3>Market &amp; tax (per year)</h3>
 <div class="row">
-  <label>Return / yr<input id="a-g" type="text" inputmode="decimal" value="0.09"></label>
-  <label>Volatility / yr<input id="a-sig" type="text" inputmode="decimal" value="0.15"></label>
-  <label>Interest deduction<input id="a-tau" type="text" inputmode="decimal" value="0.3"></label>
-  <label>Investment tax / yr<input id="a-kappa" type="text" inputmode="decimal" value="0.01"></label>
+  <label>Return<input id="a-g" type="text" inputmode="decimal" value="0.09"></label>
+  <label>Volatility<input id="a-sig" type="text" inputmode="decimal" value="0.15"></label>
+  <label>Investment tax<input id="a-kappa" type="text" inputmode="decimal" value="0.01"></label>
+  <label>Ränteavdrag<input id="a-tau" type="text" inputmode="decimal" value="0.3"></label>
+  <label>Ränteavdrag (>100k)<input id="a-tau2" type="text" inputmode="decimal" value="0.21"></label>
 </div>
-<h3>Goal</h3>
+<h3>Grid setup</h3>
 <div class="row">
-  <label>Monte Carlo objective<select id="a-goal">
-    <option value="both">Debt-free and savings target earliest</option>
-    <option value="target">Savings target earliest</option>
-    <option value="networth">Highest net worth</option>
-    <option value="payoff">Debt-free earliest</option>
-  </select></label>
-  <label>Savings (SEK)<input id="a-S" type="text" inputmode="decimal" value="4e6"></label>
   <label>Horizon (years)<input id="a-N" type="text" inputmode="decimal" value="20"></label>
   <label>Simulated paths<input id="a-paths" type="text" inputmode="decimal" value="1000"></label>
+  <div class="run"><button id="a-run">Run</button> <span id="a-status" style="font-size:13px"></span></div>
 </div>
-</div>
-<p><button id="a-run">Run</button> <span id="a-status" style="font-size:13px"></span></p>
 <div class="err" id="err-auto"></div>
-<div class="row" id="a-score"><label>Confidence<input id="a-conf" type="text" inputmode="decimal" value="0.99"></label>
-  <label>Max shortfall risk<input id="a-risk" type="text" inputmode="decimal" value="0.01"></label></div>
+</div>
+<h3>Filter</h3>
+<div class="row" id="a-score">
+  <label>Confidence<input id="a-conf" type="text" inputmode="decimal" value="0.99"></label>
+  <label>Max shortfall risk<input id="a-risk" type="text" inputmode="decimal" value="0.01"></label>
+</div>
 <div class="err" id="err-conf"></div>
 <div id="a-counts" style="font-size:13px; min-height:1.3em"></div>
-<div id="plot-corner" class="plot corner"></div>
+<div class="scroll"><div id="plot-corner" class="plot corner"></div></div> <!-- swipe sideways on phones -->
 <div id="auto-summary"></div>
 <div id="plot-fan" class="plot"></div>
 </div>
@@ -260,6 +280,8 @@ function guarded(fn, errId) { // a failure in one chart shows a message instead 
   return () => { try { fn(); document.getElementById(errId).textContent = ''; } catch (e) { document.getElementById(errId).textContent = e.message; } };
 }
 
+// SI label with no decimals: 2500000 -> "3M", 640000 -> "640k".
+const si0 = v => { const [d, u] = Math.abs(v) >= 1e6 ? [1e6, 'M'] : Math.abs(v) >= 1e3 ? [1e3, 'k'] : [1, '']; return Math.round(v / d) + u; };
 // SI label with at most 1 decimal: 2500000 -> "2.5M", 640000 -> "640k".
 const si = v => { const [d, u] = Math.abs(v) >= 1e6 ? [1e6, 'M'] : Math.abs(v) >= 1e3 ? [1e3, 'k'] : [1, '']; return +(v / d).toFixed(1) + u; };
 // Round 1/2/5×10ⁿ ticks over [0, max], each labelled "abs (pct% of total)".
@@ -369,7 +391,7 @@ housing(); savings();
 let wasNarrow = isNarrow();
 window.addEventListener('resize', () => { if (isNarrow() !== wasNarrow) { wasNarrow = !wasNarrow; housing(); savings(); if (auto.shown?.length) redrawAuto(); } });
 
-// ===================== Auto tab: Monte Carlo strategy search (maths in estimator_notes.md) =====================
+// ===================== Auto tab: Simulation grid strategy search (maths in estimator_notes.md) =====================
 // The functions from mulberry32 to runGrid are self-contained: they are also stringified into a Web Worker.
 function mulberry32(a) { // small seeded PRNG, so every strategy sees the same random market paths
   return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -399,30 +421,33 @@ function growth(q, seed) {
 function simPath(q, pol, G, path, rec) {
   const N = q.N, g0 = ((1 + q.g) * (1 - q.kappa)) ** (1 / 12);
   const floor = Math.min(q.buffer, q.P0); // shortfall = savings below the buffer (or below the start, if that's lower)
-  let B = q.L, P = q.P0, p = 0, X = q.X, tT = Infinity, tF = Infinity, tTF = Infinity, ruin = false, yr = null;
+  let B = q.L, P = q.P0, p = 0, X = q.X, tF = Infinity, ruin = false, yr = null, I = 0;
   for (let m = 0; m < N; m++) {
     if (m % 12 === 0) { // amortisation requirement and budget are re-set once a year
       p = amortRate(B, q); X = q.X * (1 + q.dX) ** (m / 12);
       if (rec && rec.years) rec.years.push(yr = { repay: 0, invest: 0, lump: 0 });
     }
-    const R = Math.min(q.L * p / 12, B), s = X - R - B * q.r / 12 * (1 - q.tau) - q.A;
-    B -= R;
+    const int = B * q.r / 12, R = Math.min(q.L * p / 12, B), s = X - R - int - q.A; // full interest paid monthly
+    I += int; B -= R;
     const u = s > 0 && B / q.V > pol.theta ? Math.min(pol.alpha * s, B) : 0, v = s - u;
     B -= u;
     // if savings are negative (budget too small), the shortfall is treated as borrowed at the mortgage rate
     P = P * (P < 0 ? 1 + q.r / 12 : G ? G[path * N + m] : g0) + v;
     if (P < floor) ruin = true;
+    if ((m + 1) % 12 === 0 || m === N - 1) { // year end: interest deduction refunded into savings (30% up to 100k SEK, 21% above)
+      const ded = q.tau * Math.min(I, 1e5) + q.tau2 * Math.max(I - 1e5, 0);
+      P += ded; I = 0;
+      if (yr) yr.invest += ded;
+    }
     let lump = 0;
     if ((m + 1) % 12 === 0 && pol.lump !== null && B / q.V > pol.lump) {
       lump = Math.max(Math.min(B - pol.lump * q.V, P - q.buffer), 0); B -= lump; P -= lump;
     }
     if (yr) { yr.repay += R + u; yr.invest += v; yr.lump += lump; }
     if (B < 1e-6) { B = 0; if (tF === Infinity) tF = m + 1; }
-    if (P >= q.S && tT === Infinity) tT = m + 1;
-    if (B === 0 && P >= q.S && tTF === Infinity) tTF = m + 1;
     if (rec && rec.P) { rec.P[path * N + m] = P; rec.B[path * N + m] = B; }
   }
-  return { W: P - B, tT, tF, tTF, ruin };
+  return { W: P - B, tF, ruin };
 }
 function policies() { // alpha 0..1 × theta × lump rule (theta is irrelevant when alpha = 0)
   const out = [];
@@ -432,11 +457,11 @@ function policies() { // alpha 0..1 × theta × lump rule (theta is irrelevant w
 function runGrid(q, progress) {
   const G = growth(q, 12345), pols = policies(), res = [];
   pols.forEach((pol, k) => {
-    const W = [], tT = [], tF = [], tTF = []; let ruin = 0;
-    for (let i = 0; i < q.paths; i++) { const o = simPath(q, pol, G, i, null); W.push(o.W); tT.push(o.tT); tF.push(o.tF); tTF.push(o.tTF); ruin += o.ruin; }
+    const W = [], tF = []; let ruin = 0;
+    for (let i = 0; i < q.paths; i++) { const o = simPath(q, pol, G, i, null); W.push(o.W); tF.push(o.tF); ruin += o.ruin; }
     // keep every path's outcome (sorted), so any confidence level can be applied afterwards without re-simulating
     const srt = a => Float64Array.from(a).sort();
-    res.push({ pol, paths: { W: srt(W), tT: srt(tT), tF: srt(tF), tTF: srt(tTF) }, ruin: ruin / q.paths });
+    res.push({ pol, paths: { W: srt(W), tF: srt(tF) }, ruin: ruin / q.paths });
     if (progress && k % 8 === 0) progress(k / pols.length);
   });
   return res;
@@ -445,8 +470,10 @@ function runGrid(q, progress) {
 const workerSrc = [mulberry32, normals, amortRate, growth, simPath, policies, runGrid].map(String).join('\n') +
   '\nonmessage = e => postMessage({ done: runGrid(e.data, p => postMessage({ progress: p })) });';
 const auto = { q: null, res: null, sel: 0, worker: null, bound: new Set() };
-const goalKey = { networth: null, target: 'tT', both: 'tTF', payoff: 'tF' };
 const pct = v => `${Math.round(v * 100)}%`;
+// Month count -> "12y 3m" ("not reached" for Infinity).
+const ymShort = m => m === Infinity ? 'not reached'
+  : [Math.floor(m / 12) && `${Math.floor(m / 12)}y`, m % 12 && `${m % 12}m`].filter(Boolean).join(' ') || '0m';
 const tm = m => m === Infinity ? 'not reached within horizon' : ymLabel(m);
 const fmt = v => Math.round(v).toLocaleString('en-US');
 const pct1 = v => `${+(v * 100).toFixed(v < 0.01 ? 2 : v < 0.1 ? 1 : 0)}%`;
@@ -466,15 +493,13 @@ function readAuto() {
   };
   const L = v('a-L', 'Mortgage', 0, 1e9), D = v('a-D', 'Down payment', 0, 1e9);
   if (!(L + D > 0)) throw new Error('Mortgage + down payment must be positive.');
-  const S = calc(document.getElementById('a-S').value);
   return {
     L, V: L + D, r: v('a-r', 'Interest rate', 0, 1), A: v('a-A', 'Avgift', 0, 1e7),
     X: v('a-X', 'Monthly budget', 0, 1e8), dX: v('a-dX', 'Budget change', -0.5, 1), P0: v('a-P0', 'Starting savings', -1e9, 1e10),
     buffer: v('a-buf', 'Savings buffer', 0, 1e10), g: v('a-g', 'Expected return', -0.5, 1), sig: v('a-sig', 'Volatility', 0, 1),
-    tau: v('a-tau', 'Interest deduction', 0, 1), kappa: v('a-kappa', 'Investment tax', 0, 0.5),
-    S: S === null || Number.isNaN(S) ? Infinity : S, N: Math.round(v('a-N', 'Horizon', 1, 100) * 12),
-    paths: Math.round(v('a-paths', 'Simulated paths', 100, 5000)),
-    goal: document.getElementById('a-goal').value,
+    tau: v('a-tau', 'Interest deduction', 0, 1), tau2: v('a-tau2', 'Deduction above 100k', 0, 1), kappa: v('a-kappa', 'Investment tax', 0, 0.5),
+    N: Math.round(v('a-N', 'Horizon', 1, 100) * 12),
+    paths: Math.round(v('a-paths', 'Simulated paths', 100, 10000)),
   };
 }
 
@@ -482,7 +507,6 @@ function runAuto() {
   const err = document.getElementById('err-auto'), status = document.getElementById('a-status');
   let q;
   try { q = readAuto(); err.textContent = ''; } catch (e) { err.textContent = e.message; return; }
-  if (q.goal !== 'networth' && q.goal !== 'payoff' && q.S === Infinity) { err.textContent = 'Set a savings target for this objective.'; return; }
   status.textContent = 'Running…';
   const done = res => { status.textContent = `${res.length} strategies × ${q.paths} paths`; auto.q = q; auto.res = res; applyConf(); };
   auto.worker?.terminate();
@@ -494,8 +518,8 @@ function runAuto() {
 }
 
 // Confidence and the risk threshold are applied after the simulation: take quantiles of the stored per-path outcomes,
-// drop strategies that miss the goal or are too risky, re-rank, redraw.
-// Pessimistic net worth = (1-conf) quantile; goal times = conf quantile ("reached by then in conf of paths").
+// hide strategies that are too risky, redraw.
+// Pessimistic net worth = (1-conf) quantile; debt-free time = conf quantile ("debt-free by then in conf of paths").
 const qSorted = (s, q) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))];
 function applyConf() {
   const read = (id, lo, hi, msg) => { const el = document.getElementById(id), v = calc(el.value), bad = !(v >= lo && v <= hi);
@@ -508,38 +532,27 @@ function applyConf() {
   // only used for scoring and display, so the cached paths of the selected strategy stay valid
   auto.q.conf = c; auto.q.risk = risk;
   for (const r of auto.res) Object.assign(r, { wLow: qSorted(r.paths.W, 1 - c), wMed: qSorted(r.paths.W, 0.5),
-    tT: qSorted(r.paths.tT, c), tF: qSorted(r.paths.tF, c), tTF: qSorted(r.paths.tTF, c) });
-  // shown: strategies that reach the goal (time objectives: within the horizon, in conf of paths) and aren't too risky
-  const gk = goalKey[auto.q.goal];
-  const reach = auto.res.map((_, i) => i).filter(i => !gk || auto.res[i][gk] < Infinity);
-  auto.shown = reach.filter(i => auto.res[i].ruin <= risk);
-  const nRisky = reach.length - auto.shown.length;
-  counts.textContent = `${auto.res.length} strategies simulated` + (gk ? ` · ${reach.length} reach the goal` : '') +
-    ` · ${nRisky} too risky (hidden) · ${auto.shown.length} shown`;
+    tF: qSorted(r.paths.tF, c) });
+  // shown: strategies within the risk limit (not debt-free within the horizon just leaves a gap on that axis)
+  auto.shown = auto.res.map((_, i) => i).filter(i => auto.res[i].ruin <= risk);
+  counts.textContent = `${auto.res.length} strategies simulated · ${auto.res.length - auto.shown.length} too risky (hidden) · ${auto.shown.length} shown`;
   if (!auto.shown.length) {
     for (const id of ['plot-corner', 'plot-fan']) Plotly.purge(id);
     auto.bound?.clear(); // purge drops the click handlers
-    document.getElementById('auto-summary').textContent = !reach.length
-      ? `No strategy reaches "${xLabel[gk]}" within ${auto.q.N / 12} years in ${pct(c)} of paths. Try a lower confidence, a longer horizon or a smaller target.`
-      : `Every strategy that reaches the goal has shortfall risk above ${pct1(risk)}. Try a higher max risk, a smaller buffer or a larger budget.`;
+    document.getElementById('auto-summary').textContent =
+      `Every strategy has shortfall risk above ${pct1(risk)}. Try a higher max risk, a smaller buffer or a larger budget.`;
     return;
   }
   auto.sel = rank().find(i => auto.shown.includes(i)); redrawAuto();
 }
 
-// Strategies sorted best-first: feasible ones (shortfall risk ≤ max risk) first, then by the goal's time (if any),
-// then by pessimistic final net worth. Returns indices into auto.res.
+// Strategies sorted for the default selection: feasible ones (shortfall risk ≤ max risk) first, then by pessimistic
+// final net worth. Returns indices into auto.res.
 function rank() {
-  const { q, res } = auto, key = goalKey[q.goal], cmp = (a, b) => a === b ? 0 : a < b ? -1 : 1;
+  const { q, res } = auto, cmp = (a, b) => a === b ? 0 : a < b ? -1 : 1;
   const ok = r => r.ruin <= q.risk;
-  return res.map((_, i) => i).sort((i, j) => {
-    const a = res[i], b = res[j];
-    return (ok(b) - ok(a)) || (key ? cmp(a[key], b[key]) : 0) || cmp(b.wLow, a.wLow);
-  });
+  return res.map((_, i) => i).sort((i, j) => (ok(res[j]) - ok(res[i])) || cmp(res[j].wLow, res[i].wLow));
 }
-// goal time shown in the corner plot: the objective's; for "net worth" use debt-free+target (or payoff if no target).
-const xKey = () => goalKey[auto.q.goal] ?? (auto.q.S < Infinity ? 'tTF' : 'tF');
-const xLabel = { tT: 'savings target reached', tTF: 'debt-free and target reached', tF: 'debt-free' };
 
 // All paths of the selected strategy (balances per month plus per-path outcomes), cached per selection.
 function selPaths() {
@@ -565,7 +578,7 @@ function redrawAuto() { drawCorner(); drawSelected(); }
 
 // Gaussian kernel density estimate on 101 points, Silverman's rule-of-thumb bandwidth (NaN/Infinity ignored).
 function kde(xs) {
-  xs = xs.filter(Number.isFinite); const m = xs.length; if (!m) return { x: [], y: [] };
+  xs = xs.filter(Number.isFinite); const m = xs.length; if (!m) return { x: [], y: [], sd: 0, modes: [] };
   const s = Float64Array.from(xs).sort(), mean = xs.reduce((a, b) => a + b, 0) / m;
   const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / m), iqr = qSorted(s, 0.75) - qSorted(s, 0.25);
   let h = 0.9 * Math.min(sd, iqr / 1.34 || sd) * m ** -0.2;
@@ -576,45 +589,73 @@ function kde(xs) {
     for (const v of xs) d += Math.exp(-0.5 * ((u - v) / h) ** 2);
     x.push(u); y.push(d * norm);
   }
-  return { x, y };
+  // modes: local maxima of the density, highest first. A Gaussian KDE's peaks lie within the data range, so a grid
+  // point just outside it (e.g. a risk of -0.004% when most values are 0) is clamped back to the nearest data value.
+  const modes = y.map((v, t) => [x[t], v]).filter((_, t) => (t === 0 || y[t] > y[t - 1]) && (t === 100 || y[t] >= y[t + 1]))
+    .sort((p, q) => q[1] - p[1]).map(p => Math.min(Math.max(p[0], s[0]), s[m - 1]));
+  return { x, y, sd, modes };
 }
 
-// Corner plot of the shown strategies: strategy settings (alpha, theta, lump LTV) and outcomes (risk, time to goal,
-// pessimistic net worth). Diagonal: kernel density of each; below it: every pair as a scatter.
+// Corner plot of the shown strategies: strategy settings (alpha, theta, lump LTV) and outcomes (risk, years to
+// debt-free, median and pessimistic net worth). Diagonal: kernel density of each; below it: every pair as a scatter.
 // The settings take only a few values, so their points are jittered slightly to show how many sit on each value.
 function drawCorner() {
-  const { q, res, shown } = auto, k = xKey();
+  const { q, res, shown } = auto, yrs = t => t === Infinity ? NaN : t / 12;
   const jit = (i, s, w) => (((i * 7919 + s * 104729) % 997) / 997 - 0.5) * w;
   const dims = [ // raw: the value; jit: seed for sideways jitter in the scatter panels (settings only)
-    { name: 'α (prepaid share)', raw: r => r.pol.alpha, jit: 1, jw: 0.02, ticks: [[0, 0.5, 1], ['0', '0.5', '1']] },
-    { name: 'θ (prepay until LTV)', raw: r => r.pol.theta, jit: 2, ticks: [[0, 0.5, 0.7], ['0', '50%', '70%']] },
-    { name: 'λ (lump-sum LTV)', raw: r => r.pol.lump ?? 1, jit: 3, ticks: [[0, 0.5, 0.7, 1], ['0', '50%', '70%', 'none']] },
-    { name: 'shortfall risk', raw: r => r.ruin, fmt: '.1%' },
-    { name: 'years to goal', raw: r => r[k] === Infinity ? NaN : r[k] / 12 },
-    { name: `net worth (worst ${pct(1 - q.conf)})`, raw: r => r.wLow, fmt: '~s' },
+    // show: short label for the peak / σ titles above the diagonal (mode = true for the peak, false for σ)
+    // levels: the few values a discrete setting takes; its diagonal is a histogram of them instead of a KDE
+    { name: 'α (prepaid share)', raw: r => r.pol.alpha, jit: 1, jw: 0.02, ticks: [[0, 0.5, 1], ['0', '0.5', '1']], show: v => +v.toFixed(2) },
+    { name: 'θ (prepay until LTV)', raw: r => r.pol.theta, jit: 2, levels: [0, 0.5, 0.7], ticks: [[0, 0.5, 0.7], ['0', '50%', '70%']], show: pct },
+    { name: 'λ (lump-sum LTV)', raw: r => r.pol.lump ?? 1, jit: 3, levels: [0, 0.5, 0.7, 1], ticks: [[0, 0.5, 0.7, 1], ['0', '50%', '70%', 'none']],
+      show: (v, mode) => mode && v > 0.85 ? 'none' : pct(v) },
+    { name: 'shortfall risk', raw: r => r.ruin, fmt: '.1%', show: (v, mode) => `${(v * 100).toFixed(mode ? 3 : 1)}%` },
+    { name: 'years to debt-free', raw: r => yrs(r.tF), show: v => +v.toFixed(1) },
+    { name: 'net worth (med)', raw: r => r.wMed, fmt: '~s', show: (v, mode) => mode ? si(v) : si0(v) },
+    { name: `net worth (low ${pct(1 - q.conf)})`, raw: r => r.wLow, fmt: '~s', show: (v, mode) => mode ? si(v) : si0(v) },
   ];
   const n = dims.length, gap = 0.025, size = (1 - gap * (n - 1)) / n;
   const groups = [['strategies', shown, '#555']];
   const raws = dims.map(d => shown.map(i => d.raw(res[i])));
   const vals = dims.map((d, p) => d.jit ? raws[p].map((v, s) => v + jit(shown[s], d.jit, d.jw ?? 0.05)) : raws[p]), at = Object.fromEntries(shown.map((i, p) => [i, p]));
   const ax = (i, j) => i * n + j + 1, key = (c, a) => a + (c === 1 ? '' : c);
-  const text = i => `${describe(res[i].pol)}<br>${xLabel[k]}: ${tm(res[i][k])}<br>net worth: ${fmt(res[i].wLow)} (worst ${pct(1 - q.conf)})<br>shortfall risk: ${riskTxt(res[i].ruin, q.paths)}`;
-  const traces = [], layout = { showlegend: false, hovermode: 'closest', margin: { l: 70, r: 10, t: 10, b: 60 },
-    legend: { x: 0.98, xanchor: 'right', y: 0.98 } };
+  const text = i => { const { pol } = res[i];
+    return `α ${+pol.alpha.toFixed(2)}, θ ${pct(pol.theta)}, λ ${pol.lump === null ? 'none' : pct(pol.lump)}<br>` +
+      `debt-free: ${ymShort(res[i].tF)}<br>net worth: med ${si(res[i].wMed)}, low ${pct(1 - q.conf)} ${si(res[i].wLow)}<br>shortfall risk: ${riskTxt(res[i].ruin, q.paths)}`; };
+  const traces = [], annotations = [], layout = { showlegend: false, hovermode: 'closest', margin: { l: 70, r: 10, t: 24, b: 60 },
+    legend: { x: 0.98, xanchor: 'right', y: 0.98 }, annotations, dragmode: false }; // no zoom/pan: click to select only
   for (let i = 0; i < n; i++) for (let j = 0; j <= i; j++) {
     const c = ax(i, j), xa = key(c, 'x'), ya = key(c, 'y');
     const fmtAxis = (d, show) => ({ ...(d.ticks && { tickvals: d.ticks[0], ticktext: d.ticks[1] }), ...(d.fmt && { tickformat: d.fmt }),
-      showticklabels: show, zeroline: false, tickfont: { size: 10 } });
+      showticklabels: show, zeroline: false, tickfont: { size: 10 }, fixedrange: true });
     layout[key(c, 'xaxis')] = { domain: [j * (size + gap), j * (size + gap) + size], anchor: ya, ...fmtAxis(dims[j], i === n - 1),
       ...(i === n - 1 ? { title: { text: dims[j].name, font: { size: 11 } } } : { matches: key(ax(n - 1, j), 'x') }) };
     layout[key(c, 'yaxis')] = { domain: [1 - (i + 1) * size - i * gap, 1 - i * size - i * gap], anchor: xa,
-      ...(i === j ? { showticklabels: false } : fmtAxis(dims[i], j === 0)),
+      ...(i === j ? { showticklabels: false, fixedrange: true } : fmtAxis(dims[i], j === 0)),
       ...(i !== j && j === 0 && { title: { text: dims[i].name, font: { size: 11 } } }),
       ...(i !== j && j > 0 && { matches: key(ax(i, 0), 'y') }) };
     for (const [name, idx, color] of groups) {
       const x = idx.map(s => vals[j][at[s]]);
-      if (i === j) { const d = kde(idx.map(s => raws[j][at[s]])); traces.push({ type: 'scatter', mode: 'lines', x: d.x, y: d.y,
-        xaxis: xa, yaxis: ya, name, showlegend: false, fill: 'tozeroy', line: { color, width: 1.5 }, fillcolor: 'rgba(85,85,85,0.2)', hoverinfo: 'skip' }); }
+      if (i === j) {
+        const xs = idx.map(s => raws[j][at[s]]), { levels, show: sh } = dims[j];
+        let title = '';
+        if (levels) {
+          // discrete setting: share of strategies at each level; title: the most common level
+          const share = levels.map(v => xs.filter(x => x === v).length / (xs.length || 1)), best = share.indexOf(Math.max(...share));
+          if (xs.length) title = `max=${sh(levels[best], true)}`;
+          traces.push({ type: 'bar', x: levels, y: share, width: 0.08, xaxis: xa, yaxis: ya, name, showlegend: false,
+            marker: { color: 'rgba(85,85,85,0.35)', line: { color, width: 1 } }, hoverinfo: 'skip' });
+        } else {
+          // continuous: KDE; title: its highest peak and the standard deviation
+          const d = kde(xs);
+          if (d.modes.length) title = `max=${sh(d.modes[0], true)}, σ=${sh(d.sd, false)}`;
+          traces.push({ type: 'scatter', mode: 'lines', x: d.x, y: d.y,
+            xaxis: xa, yaxis: ya, name, showlegend: false, fill: 'tozeroy', line: { color, width: 1.5 }, fillcolor: 'rgba(85,85,85,0.2)', hoverinfo: 'skip' });
+        }
+        if (title) annotations.push({ xref: `${xa} domain`, yref: `${ya} domain`, y: 1, yanchor: 'bottom', yshift: 2, showarrow: false,
+          x: j === n - 1 ? 1 : 0.5, xanchor: j === n - 1 ? 'right' : 'center', // last column: stay inside the figure
+          font: { size: 10 }, text: title }); // the corner plot is never narrow: it scrolls on phones
+      }
       else traces.push({ type: 'scatter', mode: 'markers', x, y: idx.map(s => vals[i][at[s]]), xaxis: xa, yaxis: ya, customdata: idx,
         text: idx.map(text), hovertemplate: '%{text}<extra></extra>', name, legendgroup: name,
         showlegend: false, marker: { color, size: 4 } });
@@ -622,12 +663,22 @@ function drawCorner() {
     if (i !== j && at[auto.sel] !== undefined) traces.push({ type: 'scatter', mode: 'markers', xaxis: xa, yaxis: ya, hoverinfo: 'skip',
       x: [vals[j][at[auto.sel]]], y: [vals[i][at[auto.sel]]], showlegend: false, marker: { color: 'rgba(0,0,0,0)', size: 11, line: { color: 'black', width: 1.5 } } });
   }
-  Plotly.react('plot-corner', traces, layout, { responsive: true });
+  Plotly.react('plot-corner', traces, layout, { responsive: true, scrollZoom: false, doubleClick: false, modeBarButtonsToRemove: ['zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'] });
   bindClick('plot-corner');
 }
 
+// Months until a goal across paths: one time if every path agrees, "not reached" if not even the early end of the
+// band reaches it, otherwise the median and the band ("12y 3m", or "not reached" past the horizon).
+function timeBand(ts, lo, hi) {
+  const s = Float64Array.from(ts).sort();
+  if (s[0] === s[s.length - 1]) return s[0] === Infinity ? tm(s[0]) : ymShort(s[0]);
+  const a = qSorted(s, lo), b = qSorted(s, hi);
+  if (a === Infinity) return tm(a);
+  return `med ${ymShort(qSorted(s, 0.5))} (${pct(lo)}–${pct(hi)}: ${ymShort(a)} – ${ymShort(b)})`;
+}
+
 function drawSelected() {
-  const { q, res } = auto, r = res[auto.sel], N = q.N, n = q.paths, { rec } = selPaths();
+  const { q, res } = auto, r = res[auto.sel], N = q.N, n = q.paths, { rec, out } = selPaths();
   const W = rec.P.map((v, i) => v - rec.B[i]), lo = 1 - q.conf, hi = q.conf;
   const band = arr => { // per-month quantiles across paths
     const out = [[], [], []], col = new Float64Array(n);
@@ -637,21 +688,22 @@ function drawSelected() {
     }
     return out;
   };
-  const x = Array.from({ length: N }, (_, m) => ymLabel(m + 1)), tr = [];
+  const x = Array.from({ length: N }, (_, m) => ymLabel(m + 1)), tr = [], hover = '%{y:.2~s}<extra></extra>'; // 7.3M, 640k
   for (const [name, arr, color] of [['savings', rec.P, '31,119,180'], ['loan', rec.B, '214,39,40'], ['net worth', W, '44,160,44']]) {
     const [a, med, b] = band(arr);
     tr.push({ x, y: a, name: `${name} ${pct(lo)}`, line: { width: 0 }, legendgroup: name, showlegend: false, hovertemplate: hover },
             { x, y: b, name: `${name} ${pct(hi)}`, line: { width: 0 }, fill: 'tonexty', fillcolor: `rgba(${color},0.15)`, legendgroup: name, showlegend: false, hovertemplate: hover },
-            { x, y: med, name: `${name} (median)`, line: { color: `rgb(${color})` }, legendgroup: name, hovertemplate: hover });
+            { x, y: med, name: `${name} (med)`, line: { color: `rgb(${color})` }, legendgroup: name, hovertemplate: hover });
   }
   Plotly.react('plot-fan', tr, {
-    xaxis: monthAxis(N), yaxis: { title: { text: `SEK (median, ${pct(lo)}–${pct(hi)} band)` }, tickformat: '~s' }, hovermode: 'x unified',
-    ...legendLayout({ l: 70, r: 160 }, { l: 60, r: 20 }),
-  }, { responsive: true });
+    xaxis: { ...monthAxis(N), fixedrange: true }, yaxis: { title: { text: `SEK (med, ${pct(lo)}–${pct(hi)} band)` }, tickformat: '~s', fixedrange: true },
+    hovermode: 'x unified', dragmode: false, // no zoom/pan
+    ...legendLayout({ l: 70, r: 190 }, { l: 60, r: 20 }),
+  }, { responsive: true, scrollZoom: false, doubleClick: false, modeBarButtonsToRemove: ['zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'] });
   document.getElementById('auto-summary').innerHTML =
     `<b>Selected:</b> ${describe(r.pol)}.<br>` +
-    `Final net worth (savings − loan): median ${fmt(r.wMed)}, worst ${pct(lo)} ${fmt(r.wLow)}.<br>` +
-    `Debt-free: ${tm(r.tF)}.<br> Savings target: ${tm(r.tT)}. <br> Both: ${tm(r.tTF)} (each reached in ${pct(q.conf)} of paths).<br>` +
+    `Final net worth: med ${si(r.wMed)}, low ${pct(lo)} ${si(r.wLow)}.<br>` +
+    `Debt-free: ${timeBand(out.map(o => o.tF), lo, hi)}.<br>` +
     `Shortfall risk: ${riskTxt(r.ruin, q.paths)}.<br>` +
     `<button id="a-apply">Apply to manual</button>`;
   document.getElementById('a-apply').onclick = () => applyToManual(q, r.pol);
@@ -687,7 +739,7 @@ function showTab(name) {
 document.querySelector('.tabs').addEventListener('click', e => e.target.dataset.tab && showTab(e.target.dataset.tab));
 document.getElementById('a-run').addEventListener('click', runAuto);
 for (const id of ['a-conf', 'a-risk']) document.getElementById(id).addEventListener('input', applyConf);
-document.getElementById('auto-inputs').addEventListener('keydown', e => e.key === 'Enter' && runAuto());
+document.getElementById('auto-inputs').addEventListener('keydown', e => e.key === 'Enter' && e.target.tagName !== 'BUTTON' && runAuto()); // a focused button runs via its click
 
 </script>
 </body>
