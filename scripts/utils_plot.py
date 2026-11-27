@@ -32,6 +32,16 @@ def plot_bar_time_series(
 
     color_bar = 'royalblue'
     color_line = 'darkorange'
+    color_cum_countries = 'mediumpurple'   # travel: running total of first visits
+    MAX_BAR_WIDTH = 0.4    # travel: width (in years) of the widest bar
+    MAX_DEPTH = 0.35       # travel: depth offset (in years) of the most travel days
+    PLOT_ASPECT = 2.0      # travel: assumed plot width / height, for the depth angle
+    MAX_BALL_SIZE = 40     # travel: diameter (px) of the largest cumulative ball
+    BALL_MIN_SIZE = 6      # travel: diameter (px) of the smallest cumulative ball
+    PLOT_HEIGHT_PX = 550   # travel: assumed (lower bound) plot height, to sit balls above the blocks
+    BALL_GAP_PX = 3        # travel: gap between a ball and the block below it
+    BAR_GAP = 0.3          # gap between years' bar clusters (fraction of a year)
+    BAR_PAIR_GAP = 0.02    # travel: gap between the two bars of a year (in years)
     
     fig = go.Figure()
 
@@ -57,70 +67,218 @@ def plot_bar_time_series(
 
         # Aggregate data
         new_group = df_visits[df_visits['visit_type'] == 'new'].groupby(time_period)
-        new_visits = new_group.agg(new_count=('country', 'nunique')).reset_index()
+        new_visits = new_group.agg(new_count=('country', 'nunique'), new_days=('count', 'sum')).reset_index()
         new_visits['new_countries'] = new_group.apply(make_numbered_list).values
 
         repeat_group = df_visits[df_visits['visit_type'] == 'repeat'].groupby(time_period)
-        repeat_visits = repeat_group.agg(repeat_count=('country', 'nunique')).reset_index()
+        repeat_visits = repeat_group.agg(repeat_count=('country', 'nunique'), repeat_days=('count', 'sum')).reset_index()
         repeat_visits['repeat_countries'] = repeat_group.apply(make_numbered_list).values
 
-        summary = pd.merge(new_visits, repeat_visits, on=time_period, how='outer').fillna({'new_count': 0, 'repeat_count': 0})
+        summary = pd.merge(new_visits, repeat_visits, on=time_period, how='outer').fillna({
+            'new_count': 0, 'repeat_count': 0, 'new_days': 0, 'repeat_days': 0,
+            'new_countries': '', 'repeat_countries': ''})
         summary = summary.sort_values(time_period)
         summary['cumulative'] = summary['new_count'].cumsum()
         summary = summary[~((summary['new_count'] == 0) & (summary['repeat_count'] == 1))].copy()
 
-        # Bars
+        x_years = summary[time_period].astype(str)
+        years = [int(y) for y in summary[time_period]]
+
+        # Countries: first (blue) and repeat (green) visits side by side, drawn
+        # as pseudo-3D blocks. Height = number of countries; width = number of
+        # trips that visited them that year; depth (an oblique projection going
+        # back into the page) = travel days spent in them that year, i.e. days
+        # on trips, not days living there.
+        countries_by = df_visits.groupby([time_period, 'visit_type'])['country'].apply(set).to_dict()
+        trips = (trip_counts or {}).get('trips')
+
+        def trips_visiting(year, visit_type):
+            """(number of trips, travel days) in that year's first/repeat-visit
+            countries: trips with a stay in one of them during the year, and the
+            days of those stays falling in the year."""
+            countries = countries_by.get((year, visit_type), set())
+            y_start, y_end = pd.Timestamp(year=year, month=1, day=1), pd.Timestamp(year=year + 1, month=1, day=1)
+            n_trips, days = 0, 0
+            for t in trips:
+                in_group = [(start, end) for c, start, end in t['stays']
+                            if c in countries and start < y_end and end >= y_start]
+                if in_group:
+                    n_trips += 1
+                    days += sum(max((min(end, y_end) - max(start, y_start)).days, 0) for start, end in in_group)
+            return n_trips, days
+
+        if trips is not None:
+            new_trips, new_travel_days = zip(*[trips_visiting(y, 'new') for y in years])
+            repeat_trips, repeat_travel_days = zip(*[trips_visiting(y, 'repeat') for y in years])
+            new_w, new_off, rep_w, rep_off = _paired_bar_geometry(
+                new_trips, repeat_trips, MAX_BAR_WIDTH, BAR_PAIR_GAP)
+        else:
+            new_trips = repeat_trips = new_travel_days = repeat_travel_days = None
+            new_w = rep_w = [MAX_BAR_WIDTH] * len(years)
+            new_off, rep_off = -MAX_BAR_WIDTH - BAR_PAIR_GAP / 2, BAR_PAIR_GAP / 2
+
+        def country_hover(counts, lists, n_trips, travel_days):
+            n_trips = n_trips if n_trips is not None else [None] * len(counts)
+            travel_days = travel_days if travel_days is not None else [None] * len(counts)
+            return [
+                '<br>'.join(part for part in (
+                    f'Depth: {_count(d, "travel day")}' if d is not None else '',
+                    f'Width: {_count(t, "trip")}' if t is not None else '',
+                    f'Height: {n:g} {"countries" if n > 1 else "country"}',
+                    lst,
+                ) if part)
+                for n, lst, t, d in zip(counts, lists, n_trips, travel_days)
+            ]
+
+        new_hover = country_hover(summary['new_count'], summary['new_countries'], new_trips, new_travel_days)
+        repeat_hover = country_hover(summary['repeat_count'], summary['repeat_countries'], repeat_trips, repeat_travel_days)
+
+        # Numeric x positions (one per year, labelled with the year) so the
+        # depth faces can be placed in the same coordinates as the bars
+        x_pos = list(range(len(years)))
         fig.add_trace(go.Bar(
-            x=summary[time_period].astype(str),
+            x=x_pos,
             y=summary['new_count'],
+            width=new_w, offset=new_off,
             name='First visits',
             marker_color=color_bar,
-            offsetgroup=0,
-            customdata=summary['new_countries'].values,
+            marker_line_width=0,
+            customdata=new_hover,
             hovertemplate='%{customdata}<extra></extra>'
         ))
-
         fig.add_trace(go.Bar(
-            x=summary[time_period].astype(str),
+            x=x_pos,
             y=summary['repeat_count'],
+            width=rep_w, offset=rep_off,
             name='Repeat visits',
             marker_color='forestgreen',
-            offsetgroup=1,
-            customdata=summary['repeat_countries'].values,
+            marker_line_width=0,
+            customdata=repeat_hover,
             hovertemplate='%{customdata}<extra></extra>'
         ))
 
-        # Trip counts (excursions away from that year's primary residence city)
-        if trip_counts is not None:
-            domestic = trip_counts.get('domestic', {})
-            international = trip_counts.get('international', {})
-            fig.add_trace(go.Bar(
-                x=summary[time_period].astype(str),
-                y=[domestic.get(int(y), 0) for y in summary[time_period]],
-                name='Trip count (dom.)',
-                marker_color='mediumpurple',
-                offsetgroup=2,
-                hovertemplate='Year: %{x}<br>Domestic trips: %{y}<extra></extra>'
-            ))
-            fig.add_trace(go.Bar(
-                x=summary[time_period].astype(str),
-                y=[international.get(int(y), 0) for y in summary[time_period]],
-                name='Trip count (intl.)',
-                marker_color='blueviolet',
-                offsetgroup=3,
-                hovertemplate='Year: %{x}<br>International trips: %{y}<extra></extra>'
-            ))
+        # Depth faces (top and right side of each block), drawn as shapes
+        # below the bars so each bar's front face covers what's behind it.
+        # Shapes can't be hovered, so each block also gets an invisible hover
+        # area covering exactly the part of its faces left visible (not hidden
+        # behind a neighbouring bar or face), so hovering always picks the
+        # block that's actually seen there.
+        n_years = len(years)
+        new_depth = new_travel_days or [0] * n_years
+        repeat_depth = repeat_travel_days or [0] * n_years
+        max_days = max(list(new_depth) + list(repeat_depth) + [1])
+        max_height = max(summary['new_count'].max(), summary['repeat_count'].max(), 1)
+        # Turn an x depth (in years) into the matching rise (in counts) so the
+        # depth recedes at about 45 degrees on a plot ~PLOT_ASPECT times wider
+        # than tall
+        y_span = max_height * 1.15
+        rise_per_year = y_span * PLOT_ASPECT / n_years
+        shapes = []
+        faces = []    # (polygon, block) in drawing order, bottom first
+        fronts = []   # bar front faces, drawn above every shape
+        blocks = []   # (hover text, colour) per block with depth
+        for heights, widths, offsets, days, color, hovers in (
+            (summary['new_count'], new_w, new_off, new_depth, color_bar, new_hover),
+            (summary['repeat_count'], rep_w, rep_off, repeat_depth, 'forestgreen', repeat_hover),
+        ):
+            offsets = offsets if isinstance(offsets, list) else [offsets] * n_years
+            top_color = _shade(color, 0.35)    # lit from above: lighter
+            side_color = _shade(color, -0.45)  # in shadow: darker
+            for i, (h, w, off, d, hover) in enumerate(zip(heights, widths, offsets, days, hovers)):
+                if h <= 0 or w <= 0:
+                    continue
+                x0, x1 = i + off, i + off + w
+                fronts.append([(x0, 0), (x1, 0), (x1, h), (x0, h)])
+                if d <= 0:
+                    continue
+                dx = MAX_DEPTH * d / max_days
+                dy = dx * rise_per_year
+                top = [(x0, h), (x1, h), (x1 + dx, h + dy), (x0 + dx, h + dy)]
+                side = [(x1, 0), (x1 + dx, dy), (x1 + dx, h + dy), (x1, h)]
+                for poly, fill in ((top, top_color), (side, side_color)):
+                    shapes.append(dict(
+                        type='path', xref='x', yref='y', layer='below',
+                        path='M ' + ' L '.join(f'{x},{y}' for x, y in poly) + ' Z',
+                        fillcolor=fill, line=dict(width=0)))
+                    faces.append((poly, len(blocks)))
+                blocks.append((hover, color))
 
-        # Cumulative line
+        # Visible part of each face: remove everything drawn above it (later
+        # faces, then all bar fronts)
+        visible = [[] for _ in blocks]
+        for k, (poly, block) in enumerate(faces):
+            pieces = [poly]
+            for above in [f for f, _ in faces[k + 1:]] + fronts:
+                pieces = [q for p in pieces for q in _subtract_convex(p, above)]
+                if not pieces:
+                    break
+            visible[block].extend(pieces)
+
+        for (hover, color), pieces in zip(blocks, visible):
+            if not pieces:
+                continue
+            xs, ys = [], []
+            for piece in pieces:
+                xs += [x for x, _ in piece] + [piece[0][0], None]
+                ys += [y for _, y in piece] + [piece[0][1], None]
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys,
+                mode='lines', fill='toself',
+                fillcolor='rgba(0,0,0,0)', line=dict(width=0),
+                hoveron='fills', hoverinfo='text', text=hover,
+                hoverlabel=dict(bgcolor=color),
+                showlegend=False,
+            ))
+        top_y = max_height + MAX_DEPTH * rise_per_year
+        fig.update_layout(shapes=shapes)
+
+        # Cumulative countries as shaded balls sitting just above the top face
+        # of each year's tallest block; ball area is proportional to the
+        # running total (no axis needed). A radial gradient (light centre,
+        # darker rim) makes each marker read as a sphere.
+        cum = summary['cumulative'].tolist()
+        cum_max = max(max(cum), 1)
+        ball_px = [max(MAX_BALL_SIZE * np.sqrt(c / cum_max), BALL_MIN_SIZE) for c in cum]
+
+        def block_top(heights, widths, offsets, depth_days, i):
+            """(height, x of the top face's centre, y of its back edge) of a year's block."""
+            off = offsets[i] if isinstance(offsets, list) else offsets
+            dx = MAX_DEPTH * depth_days[i] / max_days
+            dy = dx * rise_per_year
+            return heights[i], i + off + widths[i] / 2 + dx / 2, heights[i] + dy
+
+        new_h, rep_h = summary['new_count'].tolist(), summary['repeat_count'].tolist()
+        rests = [
+            max(block_top(new_h, new_w, new_off, new_depth, i),
+                block_top(rep_h, rep_w, rep_off, repeat_depth, i))
+            for i in range(n_years)
+        ]
+        # Ball size is in pixels: convert to counts with the y range, which in
+        # turn has to fit the balls. Each ball's bottom sits BALL_GAP_PX above
+        # the back edge of the block's top face, so it never cuts into the
+        # block. PLOT_HEIGHT_PX errs on the short side: in a taller plot the
+        # balls float a little higher rather than sinking in.
+        # (a ball of d px above y fits under R if y + (gap + d) * R / H <= R)
+        y_max = max([top_y * 1.03] + [
+            y / (1 - (BALL_GAP_PX + d) / PLOT_HEIGHT_PX) * 1.02
+            for (_, _, y), d in zip(rests, ball_px)
+        ])
+        units_per_px = y_max / PLOT_HEIGHT_PX
         fig.add_trace(go.Scatter(
-            x=summary[time_period].astype(str),
-            y=summary['cumulative'],
-            name='Cumulative count',
-            yaxis='y2',
-            mode='lines+markers',
-            line=dict(color=color_line, width=4),
-            marker=dict(size=10, color=color_line),
-            hovertemplate='Year: %{x}<br>Cumulative: %{y}<extra></extra>'
+            x=[x for _, x, _ in rests],
+            y=[y + (BALL_GAP_PX + d / 2) * units_per_px for (_, _, y), d in zip(rests, ball_px)],
+            name='Cumulative',
+            mode='markers',
+            cliponaxis=False,   # never crop a ball at the plot edge
+            marker=dict(
+                size=ball_px,
+                opacity=1,
+                color=_shade(color_cum_countries, -0.15),    # rim
+                gradient=dict(type='radial', color=_shade(color_cum_countries, 0.75)),  # centre
+                line=dict(width=0),
+            ),
+            customdata=list(zip(x_years, cum)),
+            hovertemplate='Year: %{customdata[0]}<br>Cumulative: %{customdata[1]}<extra></extra>'
         ))
 
         title = f'{title} ({int(summary["year"].min())}–{int(summary["year"].max())})'
@@ -155,52 +313,50 @@ def plot_bar_time_series(
         raise ValueError("select_type must be 'travel' or 'book'")
 
     # Layout
-    fig.update_layout(
-        title=dict(
-            text=title,
-            font=dict(size=TITLE_FONT_SIZE)
-        ),
-        font=dict(
-            size=BASE_FONT_SIZE
-        ),
+    def y_axis(text, color=None, **kw):
+        return dict(
+            title=dict(text=text, font=dict(size=AXIS_TITLE_SIZE, color=color)),
+            tickfont=dict(size=BASE_FONT_SIZE, color=color),
+            showgrid=False,
+            zeroline=False,
+            **kw
+        )
+
+    x_title = dict(text='Year', font=dict(size=AXIS_TITLE_SIZE))
+    x_common = dict(tickfont=dict(size=BASE_FONT_SIZE), showgrid=False, zeroline=False)
+    legend_common = dict(x=0.01, xanchor='left', yanchor='top', font=dict(size=LEGEND_FONT_SIZE))
+    # Travel: one-row legend just above the plot, clear of the bars
+    legend_above = dict(orientation='h', x=0, xanchor='left', yanchor='bottom',
+                        bgcolor='rgba(0,0,0,0)', font=dict(size=LEGEND_FONT_SIZE))
+
+    top_domain = [0, 0.92 if select_type == 'travel' else 1]   # room for the legend row above
+    layout = dict(
+        title=dict(text=title, font=dict(size=TITLE_FONT_SIZE)),
+        font=dict(size=BASE_FONT_SIZE),
         xaxis=dict(
-            title=dict(text='Year', font=dict(size=AXIS_TITLE_SIZE)),
-            tickfont=dict(size=BASE_FONT_SIZE),
-            showgrid=False,
-            zeroline=False
+            title=x_title,
+            **x_common
         ),
-        yaxis=dict(
-            title=dict(
-                text='Count',
-                font=dict(size=AXIS_TITLE_SIZE)
-            ),
-            tickfont=dict(size=BASE_FONT_SIZE),
-            showgrid=False,
-            zeroline=False
-        ),
-        yaxis2=dict(
-            title=dict(
-                text='Cumulative count',
-                font=dict(size=AXIS_TITLE_SIZE, color=color_line)
-            ),
-            tickfont=dict(size=BASE_FONT_SIZE, color=color_line),
-            overlaying='y',
-            side='right',
-            showgrid=False,
-            zeroline=False
-        ),
-        legend=dict(
-            x=0.03,
-            y=0.98,
-            font=dict(size=LEGEND_FONT_SIZE)
-        ),
-        hoverlabel=dict(
-            font=dict(size=HOVER_FONT_SIZE)
-        ),
+        yaxis=y_axis('Count', domain=top_domain),
+        yaxis2=y_axis('Cumulative count', color_line if select_type == 'book' else color_cum_countries, overlaying='y', side='right'),
+        legend=dict(y=top_domain[1], **legend_common),
+        hoverlabel=dict(font=dict(size=HOVER_FONT_SIZE)),
         barmode='group',
-        bargap=0.3,
+        bargap=BAR_GAP,
         template='plotly_dark'
     )
+
+    if select_type == 'travel':
+        layout['legend'] = dict(y=top_domain[1] + 0.01, **legend_above)
+        # Fixed range so the depth faces and balls fit (the axis doesn't
+        # autorange to shapes reliably)
+        layout['yaxis'].update(range=[0, y_max])
+        layout['margin'] = dict(r=30)   # no right axis any more
+        layout['xaxis'].update(tickvals=x_pos, ticktext=list(x_years),
+                               range=[-0.6, len(x_pos) - 0.4])
+        del layout['yaxis2']   # ball size shows the cumulative count
+
+    fig.update_layout(**layout)
 
     config = {
         "displayModeBar": True,        # show mode bar
@@ -230,6 +386,65 @@ def plot_bar_time_series(
         )
 
     return fig.show(config=config)
+
+def _paired_bar_geometry(left_values, right_values, max_width, gap):
+    """Widths and offsets for two bars per x category whose widths encode
+    ``left_values``/``right_values`` (one shared scale, widest = ``max_width``),
+    placed to meet at the category centre with ``gap`` between them. Plotly's
+    group mode can't lay out bars of varying width, hence explicit offsets.
+
+    Returns ``(left_widths, left_offsets, right_widths, right_offsets)``.
+    """
+    biggest = max(list(left_values) + list(right_values) + [1e-9])
+    left_w = [max_width * v / biggest for v in left_values]
+    right_w = [max_width * v / biggest for v in right_values]
+    return left_w, [-w - gap / 2 for w in left_w], right_w, gap / 2
+
+def _shade(color, amount):
+    """``color`` blended towards white (``amount`` > 0) or black (< 0) by ``|amount|``, as rgb()."""
+    r, g, b = mcolors.to_rgb(color)
+    target = 1.0 if amount > 0 else 0.0
+    a = abs(amount)
+    r, g, b = (c + (target - c) * a for c in (r, g, b))
+    return f'rgb({int(r * 255)},{int(g * 255)},{int(b * 255)})'
+
+def _clip_half_plane(poly, a, b, keep_left):
+    """Part of convex polygon ``poly`` left (or right) of the line a -> b."""
+    def side(p):
+        return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+    out = []
+    for i, p in enumerate(poly):
+        q = poly[(i + 1) % len(poly)]
+        sp, sq = side(p), side(q)
+        if not keep_left:
+            sp, sq = -sp, -sq
+        if sp >= 0:
+            out.append(p)
+        if (sp >= 0) != (sq >= 0):
+            t = sp / (sp - sq)
+            out.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+    return out
+
+def _polygon_area(poly):
+    return 0.5 * sum(p[0] * q[1] - q[0] * p[1] for p, q in zip(poly, poly[1:] + poly[:1]))
+
+def _subtract_convex(poly, cutter, eps=1e-9):
+    """Convex polygon ``poly`` minus convex polygon ``cutter`` (both
+    counter-clockwise), as a list of convex pieces."""
+    pieces, rest = [], poly
+    for i, a in enumerate(cutter):
+        b = cutter[(i + 1) % len(cutter)]
+        outside = _clip_half_plane(rest, a, b, keep_left=False)
+        if len(outside) >= 3 and abs(_polygon_area(outside)) > eps:
+            pieces.append(outside)
+        rest = _clip_half_plane(rest, a, b, keep_left=True)
+        if len(rest) < 3 or abs(_polygon_area(rest)) <= eps:
+            return pieces
+    return pieces   # whatever is left in ``rest`` lies inside the cutter
+
+def _count(value, noun):
+    """``value`` with ``noun``, plural only above 1 (e.g. '0.3 trip', '5 days')."""
+    return f"{value:g} {noun}{'s' if value > 1 else ''}"
 
 def _parse_coords(c):
     if c is None or pd.isna(c):
@@ -530,19 +745,21 @@ _AXIS_TOGGLE_SCRIPT = r"""
   var gd = document.getElementById('{plot_id}');
   if (!gd) return;
   function isOn(t){ return t.visible === true || t.visible === undefined; }
+  // Hide each y axis whose traces are all toggled off in the legend
   function refresh(){
     if (!gd.data || !window.Plotly) return;
-    var left = false, right = false;
+    var shown = {};
     gd.data.forEach(function(t){
-      if (!isOn(t)) return;
-      if (t.yaxis === 'y2') right = true;
-      else left = true;
+      var ax = t.yaxis || 'y';
+      if (!(ax in shown)) shown[ax] = false;
+      if (isOn(t)) shown[ax] = true;
     });
     var update = {};
-    var L = (gd.layout && gd.layout.yaxis && gd.layout.yaxis.visible !== false);
-    var R = (gd.layout && gd.layout.yaxis2 && gd.layout.yaxis2.visible !== false);
-    if (L !== left)  update['yaxis.visible']  = left;
-    if (R !== right) update['yaxis2.visible'] = right;
+    Object.keys(shown).forEach(function(ax){
+      var key = 'yaxis' + ax.slice(1);
+      var cur = gd.layout && gd.layout[key] && gd.layout[key].visible !== false;
+      if (cur !== shown[ax]) update[key + '.visible'] = shown[ax];
+    });
     if (Object.keys(update).length) window.Plotly.relayout(gd, update);
   }
   if (gd.on) {
