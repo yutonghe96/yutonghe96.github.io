@@ -141,6 +141,7 @@ def plot_bar_time_series(
             y=summary['new_count'],
             width=new_w, offset=new_off,
             name='First visits',
+            meta=dict(series='new'),   # legend toggle also hides its depth faces
             marker_color=color_bar,
             marker_line_width=0,
             customdata=new_hover,
@@ -151,6 +152,7 @@ def plot_bar_time_series(
             y=summary['repeat_count'],
             width=rep_w, offset=rep_off,
             name='Repeat visits',
+            meta=dict(series='repeat'),
             marker_color='forestgreen',
             marker_line_width=0,
             customdata=repeat_hover,
@@ -174,12 +176,12 @@ def plot_bar_time_series(
         y_span = max_height * 1.15
         rise_per_year = y_span * PLOT_ASPECT / n_years
         shapes = []
-        faces = []    # (polygon, block) in drawing order, bottom first
-        fronts = []   # bar front faces, drawn above every shape
-        blocks = []   # (hover text, colour) per block with depth
-        for heights, widths, offsets, days, color, hovers in (
-            (summary['new_count'], new_w, new_off, new_depth, color_bar, new_hover),
-            (summary['repeat_count'], rep_w, rep_off, repeat_depth, 'forestgreen', repeat_hover),
+        faces = []    # (polygon, block, series) in drawing order, bottom first
+        fronts = []   # (polygon, series) bar front faces, drawn above every shape
+        blocks = []   # (hover text, colour, series) per block with depth
+        for series, heights, widths, offsets, days, color, hovers in (
+            ('new', summary['new_count'], new_w, new_off, new_depth, color_bar, new_hover),
+            ('repeat', summary['repeat_count'], rep_w, rep_off, repeat_depth, 'forestgreen', repeat_hover),
         ):
             offsets = offsets if isinstance(offsets, list) else [offsets] * n_years
             top_color = _shade(color, 0.35)    # lit from above: lighter
@@ -188,7 +190,7 @@ def plot_bar_time_series(
                 if h <= 0 or w <= 0:
                     continue
                 x0, x1 = i + off, i + off + w
-                fronts.append([(x0, 0), (x1, 0), (x1, h), (x0, h)])
+                fronts.append(([(x0, 0), (x1, 0), (x1, h), (x0, h)], series))
                 if d <= 0:
                     continue
                 dx = MAX_DEPTH * d / max_days
@@ -198,37 +200,46 @@ def plot_bar_time_series(
                 for poly, fill in ((top, top_color), (side, side_color)):
                     shapes.append(dict(
                         type='path', xref='x', yref='y', layer='below',
+                        name=f'depth-{series}',   # hidden with its series' bars
                         path='M ' + ' L '.join(f'{x},{y}' for x, y in poly) + ' Z',
                         fillcolor=fill, line=dict(width=0)))
-                    faces.append((poly, len(blocks)))
-                blocks.append((hover, color))
+                    faces.append((poly, len(blocks), series))
+                blocks.append((hover, color, series))
 
         # Visible part of each face: remove everything drawn above it (later
-        # faces, then all bar fronts)
-        visible = [[] for _ in blocks]
-        for k, (poly, block) in enumerate(faces):
-            pieces = [poly]
-            for above in [f for f, _ in faces[k + 1:]] + fronts:
-                pieces = [q for p in pieces for q in _subtract_convex(p, above)]
-                if not pieces:
-                    break
-            visible[block].extend(pieces)
+        # faces, then all bar fronts). Hiding a series in the legend uncovers
+        # parts of the other one, so the hover areas are built for each
+        # combination of shown series ('both', or one alone); the post script
+        # shows the set matching the legend.
+        for scenario, shown in (('both', {'new', 'repeat'}), ('new', {'new'}), ('repeat', {'repeat'})):
+            visible = [[] for _ in blocks]
+            s_faces = [(poly, block) for poly, block, ser in faces if ser in shown]
+            s_fronts = [poly for poly, ser in fronts if ser in shown]
+            for k, (poly, block) in enumerate(s_faces):
+                pieces = [poly]
+                for above in [f for f, _ in s_faces[k + 1:]] + s_fronts:
+                    pieces = [q for p in pieces for q in _subtract_convex(p, above)]
+                    if not pieces:
+                        break
+                visible[block].extend(pieces)
 
-        for (hover, color), pieces in zip(blocks, visible):
-            if not pieces:
-                continue
-            xs, ys = [], []
-            for piece in pieces:
-                xs += [x for x, _ in piece] + [piece[0][0], None]
-                ys += [y for _, y in piece] + [piece[0][1], None]
-            fig.add_trace(go.Scatter(
-                x=xs, y=ys,
-                mode='lines', fill='toself',
-                fillcolor='rgba(0,0,0,0)', line=dict(width=0),
-                hoveron='fills', hoverinfo='text', text=hover,
-                hoverlabel=dict(bgcolor=color),
-                showlegend=False,
-            ))
+            for (hover, color, _), pieces in zip(blocks, visible):
+                if not pieces:
+                    continue
+                xs, ys = [], []
+                for piece in pieces:
+                    xs += [x for x, _ in piece] + [piece[0][0], None]
+                    ys += [y for _, y in piece] + [piece[0][1], None]
+                fig.add_trace(go.Scatter(
+                    x=xs, y=ys,
+                    mode='lines', fill='toself',
+                    fillcolor='rgba(0,0,0,0)', line=dict(width=0),
+                    hoveron='fills', hoverinfo='text', text=hover,
+                    hoverlabel=dict(bgcolor=color),
+                    showlegend=False,
+                    visible=scenario == 'both',
+                    meta=dict(depth_hover=scenario),
+                ))
         top_y = max_height + MAX_DEPTH * rise_per_year
         fig.update_layout(shapes=shapes)
 
@@ -248,6 +259,10 @@ def plot_bar_time_series(
             return heights[i], i + off + widths[i] / 2 + dx / 2, heights[i] + dy
 
         new_h, rep_h = summary['new_count'].tolist(), summary['repeat_count'].tolist()
+        # Where each ball rests when only one series is shown (the post script
+        # moves the balls there when the other is hidden in the legend)
+        rests_new = [block_top(new_h, new_w, new_off, new_depth, i) for i in range(n_years)]
+        rests_rep = [block_top(rep_h, rep_w, rep_off, repeat_depth, i) for i in range(n_years)]
         rests = [
             max(block_top(new_h, new_w, new_off, new_depth, i),
                 block_top(rep_h, rep_w, rep_off, repeat_depth, i))
@@ -278,7 +293,15 @@ def plot_bar_time_series(
                 line=dict(width=0),
             ),
             customdata=list(zip(x_years, cum)),
-            hovertemplate='Year: %{customdata[0]}<br>Cumulative: %{customdata[1]}<extra></extra>'
+            hovertemplate='Year: %{customdata[0]}<br>Cumulative: %{customdata[1]}<extra></extra>',
+            # Read by _TRAVEL_BARS_SCRIPT to grow the balls with the zoom and
+            # move them onto whichever blocks are shown
+            meta=dict(ball_zoom=dict(
+                size=[float(d) for d in ball_px],
+                rest={key: [[float(x), float(y)] for _, x, y in r]
+                      for key, r in (('both', rests), ('new', rests_new), ('repeat', rests_rep))},
+                gap=BALL_GAP_PX,
+            )),
         ))
 
         title = f'{title} ({int(summary["year"].min())}–{int(summary["year"].max())})'
@@ -382,7 +405,8 @@ def plot_bar_time_series(
             save_path,
             include_plotlyjs="cdn",
             config=config,
-            post_script=_AXIS_TOGGLE_SCRIPT,
+            # Travel has one y axis, shown or hidden by _TRAVEL_BARS_SCRIPT
+            post_script=_TRAVEL_BARS_SCRIPT if select_type == 'travel' else _AXIS_TOGGLE_SCRIPT,
         )
 
     return fig.show(config=config)
@@ -771,6 +795,106 @@ _AXIS_TOGGLE_SCRIPT = r"""
 """
 
 
+_TRAVEL_BARS_SCRIPT = r"""
+(function(){
+  // Keeps the travel bar chart's extras in step with the legend and zoom:
+  // - Legend: the depth faces (layout shapes named 'depth-new' /
+  //   'depth-repeat') and the invisible hover areas aren't legend items, so
+  //   hide them with their series' bars, and show the hover areas built for
+  //   the series still shown. The balls move onto the shown blocks.
+  // - Zoom: marker sizes are in pixels, so on their own the balls keep their
+  //   size while the bars grow. Scale each ball by how much the axes are
+  //   zoomed in (the smaller of the x and y factors, so a ball never outgrows
+  //   its block), and re-seat it the same pixel gap above its block.
+  // - Cumulative only (both bar series hidden): the count axis means nothing,
+  //   so hide it and line the balls up across the middle of the plot, one
+  //   per year.
+  var gd = document.getElementById('{plot_id}');
+  if (!gd || !gd.on) return;
+  var ball = -1, base = null, x0 = null, y0 = null;
+  function span(r){ return Math.abs(r[1] - r[0]); }
+  function isOn(t){ return t.visible === true || t.visible === undefined; }
+  function init(){
+    if (!gd.data || !gd._fullLayout) return false;
+    for (var i = 0; i < gd.data.length; i++) {
+      var m = gd.data[i].meta;
+      if (m && m.ball_zoom) { ball = i; base = m.ball_zoom; break; }
+    }
+    if (ball < 0) return false;
+    x0 = span(gd._fullLayout.xaxis.range);
+    y0 = span(gd._fullLayout.yaxis.range);
+    return true;
+  }
+  function shownSeries(){
+    var shown = {};
+    gd.data.forEach(function(t){
+      if (t.meta && t.meta.series) shown[t.meta.series] = isOn(t);
+    });
+    return shown;
+  }
+  function scenario(shown){
+    return shown['new'] && shown['repeat'] ? 'both'
+         : shown['new'] ? 'new' : shown['repeat'] ? 'repeat' : null;
+  }
+  var busy = false;
+  function sync(){
+    if (busy || !window.Plotly || (ball < 0 && !init())) return;
+    var shown = shownSeries(), sc = scenario(shown);
+    var calls = [];
+    // Depth faces
+    var shapeUpdate = {};
+    (gd.layout.shapes || []).forEach(function(sh, i){
+      var m = /^depth-(.+)$/.exec(sh.name || '');
+      if (!m) return;
+      var want = !!shown[m[1]];
+      if ((sh.visible !== false) !== want) shapeUpdate['shapes[' + i + '].visible'] = want;
+    });
+    if (Object.keys(shapeUpdate).length) calls.push(function(){ return window.Plotly.relayout(gd, shapeUpdate); });
+    // Count axis: only while some bars are shown
+    var axisWanted = !!sc;
+    if ((gd.layout.yaxis.visible !== false) !== axisWanted)
+      calls.push(function(){ return window.Plotly.relayout(gd, {'yaxis.visible': axisWanted}); });
+    // Hover areas
+    var hoverIdx = [], hoverVis = [];
+    gd.data.forEach(function(t, i){
+      if (!t.meta || !t.meta.depth_hover) return;
+      var want = t.meta.depth_hover === sc;
+      if ((t.visible !== false) !== want) { hoverIdx.push(i); hoverVis.push(want); }
+    });
+    if (hoverIdx.length) calls.push(function(){ return window.Plotly.restyle(gd, {visible: hoverVis}, hoverIdx); });
+    // Balls: size from the zoom, position on top of the shown blocks
+    var fl = gd._fullLayout;
+    var k = Math.max(Math.min(x0 / span(fl.xaxis.range), y0 / span(fl.yaxis.range)), 1);
+    var perPx = span(fl.yaxis.range) / fl._size.h;   // y units per pixel
+    var rest = base.rest[sc || 'both'];
+    var sizes = base.size.map(function(d){ return d * k; });
+    var mid = (fl.yaxis.range[0] + fl.yaxis.range[1]) / 2;
+    var xs = rest.map(function(r, i){ return sc ? r[0] : i; });
+    var ys = rest.map(function(r, i){
+      return sc ? r[1] + (base.gap + sizes[i] / 2) * perPx : mid;
+    });
+    var cur = gd.data[ball];
+    function same(a, b){
+      if (!a || !b || a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 1e-9) return false;
+      return true;
+    }
+    if (!(same(cur.marker.size, sizes) && same(cur.x, xs) && same(cur.y, ys)))
+      calls.push(function(){ return window.Plotly.restyle(gd, {'marker.size': [sizes], x: [xs], y: [ys]}, [ball]); });
+    if (!calls.length) return;
+    busy = true;
+    calls.reduce(function(p, f){ return p.then(f); }, Promise.resolve())
+      .then(function(){ busy = false; }, function(){ busy = false; });
+  }
+  function later(){ setTimeout(sync, 0); }
+  gd.on('plotly_relayout', later);
+  gd.on('plotly_restyle', later);
+  gd.on('plotly_legenddoubleclick', function(){ setTimeout(sync, 50); });
+  setTimeout(sync, 300);
+})();
+"""
+
+
 _RESET_HOOK_SCRIPT = r"""
 (function(){
   var gd = document.getElementById('{plot_id}');
@@ -981,18 +1105,30 @@ def create_map(
 
 # Treemap drill-down: cancel the click (no zoom) on leaf tiles, i.e. single
 # countries, so only tiles that contain other tiles (e.g. 'Others') zoom in.
+# Group labels read 'Name<br>(value, pct)' on their own tiles, but the tile
+# clicked into becomes a thin header with room for one line only: give that
+# tile 'Name (value, pct)' just before the zoom animation draws it.
 _TREE_LEAF_NOZOOM_SCRIPT = r"""
 (function(){
   var gd = document.getElementById('{plot_id}');
   if (!gd || !gd.on) return;
   var trace = gd.data[0];
+  var labels = (trace.labels || []).slice();   // original (two-line) labels
   var hasChildren = {};
   (trace.parents || []).forEach(function(p){ if (p) hasChildren[p] = true; });
+  function headerLabels(entryId){
+    var i = trace.ids.indexOf(entryId);
+    var out = labels.slice();
+    if (i >= 0) out[i] = String(out[i]).replace(/<br>\(/, ' (');
+    return out;
+  }
   gd.on('plotly_treemapclick', function(e){
     var pt = e && e.points && e.points[0];
     if (!pt) return;
     var id = pt.id !== undefined ? pt.id : trace.ids[pt.pointNumber];
     if (!hasChildren[id]) return false;
+    var next = e.nextLevel !== undefined ? e.nextLevel : id;
+    gd.data[0].labels = headerLabels(next);
   });
 })();
 """
@@ -1191,10 +1327,10 @@ def create_tree(
         parent_df['id'] = parent_df['flag_id']
         parent_df['parent'] = ""
         def group_label(name, v, shown_var, shown_pct):
-            # 'Name (value, pct)' for a tile holding other tiles; value_fmt /
-            # pct_fmt override the defaults, and an empty pct is left out.
-            # Leading breaks push it toward the top so it doesn't overlap the
-            # tiles inside when zoomed in.
+            # 'Name' over '(value, pct)' for a tile holding other tiles;
+            # value_fmt / pct_fmt override the defaults, and an empty pct is
+            # left out. Leading breaks push it toward the top so it doesn't
+            # overlap the tiles inside when zoomed in.
             if value_fmt is not None:
                 shown_var = value_fmt(v)
             if pct_fmt is not None:
@@ -1202,7 +1338,7 @@ def create_tree(
             else:
                 shown_pct = f"{shown_pct}%"
             pct_part = f", {shown_pct}" if shown_pct else ""
-            return f"<br><br>{name} ({shown_var}{pct_part})"
+            return f"<br><br>{name}<br>({shown_var}{pct_part})"
 
         parent_df['label'] = parent_df.apply(
             lambda r: group_label(r['flag_id'], r[var], r['_shown_var'], r['_shown_pct']),
