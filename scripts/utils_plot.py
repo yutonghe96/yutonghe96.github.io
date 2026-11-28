@@ -604,6 +604,54 @@ def _build_country_traces(df_, var, code_convention, bins, color, tooltip_mode, 
     return traces
 
 
+def _build_route_traces(df_routes, today=None, color="royalblue", width=0.8, opacity=0.35):
+    """Faint lines between consecutive stays in a chronological itinerary
+    (e.g. trips_verbose), one segment per distinct pair of places. Legs that
+    arrive after ``today`` are drawn separately in the planned colour.
+    Scattergeo lines follow great circles, so they curve on the globe."""
+    df = df_routes.dropna(subset=["coordinates"]).copy()
+    df["start_date"] = pd.to_datetime(df["start_date"])
+    df = df.sort_values("start_date", kind="stable").reset_index(drop=True)
+    df[["lat", "lon"]] = df["coordinates"].apply(_parse_coords)
+    df = df.dropna(subset=["lat", "lon"])
+    today = pd.Timestamp(today).normalize() if today is not None else pd.Timestamp.today().normalize()
+
+    legs = {"been": {}, "planned": {}}
+    for a, b in zip(df.itertuples(), df.iloc[1:].itertuples()):
+        pa, pb = (round(a.lat, 4), round(a.lon, 4)), (round(b.lat, 4), round(b.lon, 4))
+        if pa == pb:
+            continue
+        kind = "planned" if b.start_date > today else "been"
+        key = tuple(sorted([pa, pb]))
+        # A leg already travelled takes precedence over the same leg planned
+        if kind == "planned" and key in legs["been"]:
+            continue
+        legs[kind][key] = True
+        if kind == "been":
+            legs["planned"].pop(key, None)
+
+    traces = []
+    for kind, line_color in (("been", color), ("planned", _PLANNED_COLOR)):
+        if not legs[kind]:
+            continue
+        lats, lons = [], []
+        for (p1, p2) in legs[kind]:
+            lats += [p1[0], p2[0], None]
+            lons += [p1[1], p2[1], None]
+        traces.append(
+            go.Scattergeo(
+                lat=lats, lon=lons,
+                mode="lines",
+                line=dict(color=line_color, width=width,
+                          dash="dot" if kind == "planned" else "solid"),
+                opacity=opacity if kind == "been" else min(1.0, opacity * 2),
+                hoverinfo="skip",
+                name=f"routes ({kind})",
+            )
+        )
+    return traces
+
+
 def _build_city_traces(df_, var, color, tooltip_mode, df_planned):
     df = df_.copy()
     df = df.dropna(subset=["city", "coordinates", var])
@@ -971,8 +1019,15 @@ def create_map(
     tooltip_mode='calendar',
     level="country",
     df_planned=None,
+    df_routes=None,
+    today=None,
+    route_style=None,
     save_path=None
 ):
+    """``df_routes``: chronological itinerary (columns coordinates, start_date),
+    e.g. the full trips_verbose; when given, the city level gets faint lines
+    between consecutive stays. ``today`` splits flown from planned legs.
+    ``route_style``: optional dict of color / width / opacity."""
 
     # ---- Normalize projection_type and level ----
     if isinstance(projection_type, dict):
@@ -997,7 +1052,11 @@ def create_map(
                 df_, var, code_convention, bins, color, tooltip_mode, df_planned
             )
         elif lvl_value == "city":
-            traces = _build_city_traces(
+            traces = []
+            if df_routes is not None:
+                # Added first so the lines sit underneath the city markers
+                traces += _build_route_traces(df_routes, today=today, **(route_style or {}))
+            traces += _build_city_traces(
                 df_, var, color, tooltip_mode, df_planned
             )
         else:
